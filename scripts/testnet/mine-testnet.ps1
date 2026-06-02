@@ -29,18 +29,24 @@ function Find-Exe([string]$Name) {
     throw "Cannot find $Name. Run install-windows.ps1 or: .\mine-testnet.ps1 -BinDir `"$env:LOCALAPPDATA\BlockZero\bin`""
 }
 
-function Invoke-Cli([string[]]$CliArgs) {
+function Try-Invoke-Cli([string[]]$CliArgs) {
     $cli = Find-Exe "bitcoin-cli.exe"
     $prevEap = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
+    $ErrorActionPreference = "SilentlyContinue"
     $out = & $cli -testnet -datadir="$DataDir" -rpcport=18211 @CliArgs 2>&1
     $exit = $LASTEXITCODE
     $ErrorActionPreference = $prevEap
     $text = ($out | Out-String).Trim()
-    if ($exit -ne 0) {
-        throw $text
+    return @{ Ok = ($exit -eq 0); Text = $text; Exit = $exit }
+}
+
+function Invoke-Cli([string[]]$CliArgs) {
+    $result = Try-Invoke-Cli @CliArgs
+    if (-not $result.Ok) {
+        $msg = if ($result.Text) { $result.Text } else { "bitcoin-cli failed (exit $($result.Exit))" }
+        throw $msg
     }
-    return $text
+    return $result.Text
 }
 
 function Write-DefaultConf([string]$Path) {
@@ -56,6 +62,83 @@ rpcport=18211
 addnode=217.160.46.61:18210
 addnode=127.0.0.1:18210
 "@ | Set-Content -Path $Path -Encoding UTF8
+}
+
+function Test-WalletOnDisk([string]$Name) {
+    $paths = @(
+        (Join-Path $DataDir "testnet3\wallets\$Name")
+        (Join-Path $DataDir "testnet3\$Name")
+    )
+    foreach ($p in $paths) {
+        if (Test-Path $p) { return $true }
+    }
+    return $false
+}
+
+function Ensure-Wallet([string]$Name) {
+    $wallets = @(Invoke-Cli @("listwallets") | ConvertFrom-Json)
+    if ($wallets -contains $Name) { return }
+
+    $load = Try-Invoke-Cli @("loadwallet", $Name)
+    if ($load.Ok) { return }
+    if ($load.Text -match "already loaded|error code: -35") { return }
+
+    if (Test-WalletOnDisk $Name) {
+        throw @"
+Wallet '$Name' exists on disk but could not be loaded.
+
+Try:
+  .\mine-testnet.ps1 -Stop
+  .\mine-testnet.ps1
+
+If it persists, restart bitcoind manually and run:
+  bitcoin-cli -testnet -datadir=$DataDir loadwallet $Name
+
+RPC error: $($load.Text)
+"@
+    }
+
+    Invoke-Cli @("createwallet", $Name) | Out-Null
+    Write-Host "Created wallet '$Name'."
+}
+
+function Get-MiningAddressFile() {
+    return Join-Path $DataDir "mining-address.txt"
+}
+
+function Get-OrCreate-MiningAddress([string]$Name) {
+    $addrFile = Get-MiningAddressFile
+    if (Test-Path $addrFile) {
+        $saved = (Get-Content $addrFile -Raw).Trim()
+        if ($saved) {
+            try {
+                Invoke-Cli @("-rpcwallet=$Name", "getaddressinfo", $saved) | Out-Null
+                return $saved
+            } catch {}
+        }
+    }
+    $coins = @(Invoke-Cli @("-rpcwallet=$Name", "listunspent", "0", "9999999") | ConvertFrom-Json)
+    $recent = $coins | Where-Object { $_.confirmations -lt 100 -and $_.confirmations -ge 0 } |
+        Sort-Object -Property confirmations -Descending |
+        Select-Object -First 1
+    if ($recent) {
+        $addr = $recent.address
+        Set-Content -Path $addrFile -Value $addr -NoNewline -Encoding ASCII
+        return $addr
+    }
+    $addr = Invoke-Cli @("-rpcwallet=$Name", "getnewaddress")
+    Set-Content -Path $addrFile -Value $addr.Trim() -NoNewline -Encoding ASCII
+    return $addr.Trim()
+}
+
+function Get-RewardSummary([string]$Name) {
+    $coins = @(Invoke-Cli @("-rpcwallet=$Name", "listunspent", "0", "9999999") | ConvertFrom-Json)
+    $immature = @($coins | Where-Object { $_.confirmations -lt 100 -and $_.confirmations -ge 0 })
+    $byAddr = $immature | Group-Object address
+    return @{
+        BlockCount = $immature.Count
+        Addresses  = @($byAddr | ForEach-Object { $_.Name })
+    }
 }
 
 function Wait-ForPublicChain {
@@ -114,56 +197,6 @@ if (-not $running) {
 }
 
 Wait-ForPublicChain
-
-function Ensure-Wallet([string]$Name) {
-    $wallets = @(Invoke-Cli @("listwallets") | ConvertFrom-Json)
-    if ($wallets -contains $Name) { return }
-    try {
-        Invoke-Cli @("loadwallet", $Name) | Out-Null
-    } catch {
-        Invoke-Cli @("createwallet", $Name) | Out-Null
-        Write-Host "Created wallet '$Name'."
-    }
-}
-
-function Get-MiningAddressFile() {
-    return Join-Path $DataDir "mining-address.txt"
-}
-
-function Get-OrCreate-MiningAddress([string]$Name) {
-    $addrFile = Get-MiningAddressFile
-    if (Test-Path $addrFile) {
-        $saved = (Get-Content $addrFile -Raw).Trim()
-        if ($saved) {
-            try {
-                Invoke-Cli @("-rpcwallet=$Name", "getaddressinfo", $saved) | Out-Null
-                return $saved
-            } catch {}
-        }
-    }
-    $coins = @(Invoke-Cli @("-rpcwallet=$Name", "listunspent", "0", "9999999") | ConvertFrom-Json)
-    $recent = $coins | Where-Object { $_.confirmations -lt 100 -and $_.confirmations -ge 0 } |
-        Sort-Object -Property confirmations -Descending |
-        Select-Object -First 1
-    if ($recent) {
-        $addr = $recent.address
-        Set-Content -Path $addrFile -Value $addr -NoNewline -Encoding ASCII
-        return $addr
-    }
-    $addr = Invoke-Cli @("-rpcwallet=$Name", "getnewaddress")
-    Set-Content -Path $addrFile -Value $addr.Trim() -NoNewline -Encoding ASCII
-    return $addr.Trim()
-}
-
-function Get-RewardSummary([string]$Name) {
-    $coins = @(Invoke-Cli @("-rpcwallet=$Name", "listunspent", "0", "9999999") | ConvertFrom-Json)
-    $immature = @($coins | Where-Object { $_.confirmations -lt 100 -and $_.confirmations -ge 0 })
-    $byAddr = $immature | Group-Object address
-    return @{
-        BlockCount = $immature.Count
-        Addresses  = @($byAddr | ForEach-Object { $_.Name })
-    }
-}
 
 Ensure-Wallet $WalletName
 
