@@ -66,9 +66,29 @@ curl -s http://127.0.0.1:3002/api/blocks/tip/height      # current height
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8090/   # via Caddy
 ```
 
-## Notes / polish (later)
+## Branding (Block Zero / TBLOZ)
 
-- Branding shows generic "Bitcoin Explorer" / BTC ticker. Customising the coin
-  name (BLOZ/TBLOZ) requires patching btc-rpc-explorer's coin config.
+btc-rpc-explorer ships only Bitcoin labels. `scripts/explorer-branding.py`
+rewrites the coin config (`app/coins/btc.js`), the global currency table
+(`app/currencies.js` — this is where the amount unit "BTC" actually comes from)
+and several Pug views so the UI reads **Block Zero** / **TBLOZ** instead of
+**Bitcoin** / **BTC** (title, navbar, amounts, unit toggle, meta tags).
+
+Re-run it after every `git pull` of the explorer, then restart:
+
+```bash
+python3 /opt/btc-rpc-explorer/explorer-branding.py
+systemctl restart blockzero-explorer
+```
+
+Remaining upstream references are the project's own `@BitcoinExplorer` footer
+links and the "Bitcoin Quote of the Day" widget (attribution, not currency).
+
+The address prefix `tbz` (bech32 HRP) is intentional — it is Block Zero's
+testnet HRP (mainnet `bz`), analogous to Bitcoin's `tb`/`bc`. It is **not** the
+ticker; the ticker/unit is TBLOZ.
+
+## Notes
+
 - Address-history pages need an address index (electrs/electrumx). Block, tx
   and mempool browsing work without it.
