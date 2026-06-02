@@ -48,9 +48,15 @@ PATCHES = {
         ('content="BTC Explorer"', 'content="Block Zero Explorer"', 0),
     ],
     # The actual amount unit ("... BTC") comes from this global table, NOT the
-    # coin config. Rename the native unit's display name to TBLOZ.
+    # coin config. Rename the native unit's display name to TBLOZ and add a
+    # "tbloz" alias key: some views re-look-up the type by the unit's (now
+    # "tbloz") lowercased name, e.g. currencyTypes[parts.currencyUnit.toLowerCase()].
     f"{BASE}/app/currencies.js": [
         ('name:"BTC",', 'name:"TBLOZ",', 1),
+        ('global.currencySymbols = {',
+         'global.currencyTypes["tbloz"] = global.currencyTypes["btc"];\n\nglobal.currencySymbols = {',
+         1),
+        ('"btc": "\u20bf",', '"btc": "\u20bf",\n\t"tbloz": "\u20bf",', 1),
     ],
     # Amount tooltips hardcode " BTC" as the unit suffix on every page that
     # renders a value. Replace all occurrences so amounts read "... TBLOZ".
