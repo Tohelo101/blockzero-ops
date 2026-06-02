@@ -62,9 +62,9 @@ if ((Test-Path (Join-Path $BinDir "bitcoind.exe")) -and (Test-Path (Join-Path $B
         Write-Host "  1. Install Visual Studio 2022+ with C++ desktop workload"
         Write-Host "  2. git clone --recurse-submodules https://github.com/$Repo"
         Write-Host "  3. See blockzero-core/doc/build-windows-msvc.md"
-        Write-Host "  4. Copy build\bin\bitcoind.exe and bitcoin-cli.exe to $BinDir"
+        Write-Host '  4. Copy build\bin\bitcoind.exe and bitcoin-cli.exe to' $BinDir
         Write-Host ""
-        Write-Host "Do NOT mine in WSL2 — RandomX is much slower there."
+        Write-Host "Do NOT mine in WSL2 - RandomX is much slower there."
         throw
     }
 }
@@ -78,7 +78,7 @@ if (-not (Test-Path $conf)) {
 
 Write-Host ""
 Write-Host "Done. Add to PATH for this session:"
-Write-Host ('  $env:Path += "' + $BinDir + '"')
+Write-Host ('  $env:Path += {0}{1}{0}' -f '"', $BinDir)
 Write-Host ""
 Write-Host "Start mining:"
-Write-Host ('  .\mine-testnet.ps1 -BinDir "' + $BinDir + '"')
+Write-Host ('  .\mine-testnet.ps1 -BinDir {0}{1}{0}' -f '"', $BinDir)
