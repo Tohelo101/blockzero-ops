@@ -12,7 +12,7 @@ Fair launch. Proof-of-work. No presale. No insiders.
 
 | Platform | Script |
 |----------|--------|
-| **Windows** | [`scripts/testnet/install-windows.ps1`](scripts/testnet/install-windows.ps1) → [`mine-testnet.ps1`](scripts/testnet/mine-testnet.ps1) |
+| **Windows** | [`install-windows.ps1`](scripts/testnet/install-windows.ps1) → [`resync-testnet.ps1`](scripts/testnet/resync-testnet.ps1) → [`mine-testnet.ps1`](scripts/testnet/mine-testnet.ps1) |
 | **Linux / macOS** | [`scripts/testnet/install-unix.sh`](scripts/testnet/install-unix.sh) → [`mine-testnet.sh`](scripts/testnet/mine-testnet.sh) |
 
 Downloads prebuilt binaries from [blockzero-core Releases](https://github.com/Rexemre/blockzero-core/releases).  

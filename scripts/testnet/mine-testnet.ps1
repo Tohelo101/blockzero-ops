@@ -1,10 +1,9 @@
 # Block Zero testnet miner (Windows, native binaries — NOT WSL)
 # Usage:
-#   .\mine-testnet.ps1              # start node + mine
-#   .\mine-testnet.ps1 -Status      # show height and balance
+#   .\mine-testnet.ps1              # sync check + mine on public testnet
+#   .\mine-testnet.ps1 -Status      # show height, peers, balance
 #   .\mine-testnet.ps1 -Stop        # stop bitcoind
-#
-# Requires bitcoind.exe and bitcoin-cli.exe on PATH or in -BinDir.
+#   .\resync-testnet.ps1            # reset fork and re-sync (run this first if solo-mined)
 
 param(
     [string]$BinDir = "",
@@ -16,6 +15,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$OfficialBlock1 = "7a28c3b91ddd8404a13a2557eb0e1f8bee664ffc7e7a0a90fb4473f762e6ec79"
 
 function Find-Exe([string]$Name) {
     if ($BinDir) {
@@ -32,6 +32,51 @@ function Invoke-Cli([string[]]$CliArgs) {
     & $cli -testnet -datadir="$DataDir" -rpcport=18211 @CliArgs
 }
 
+function Write-DefaultConf([string]$Path) {
+    @"
+server=1
+txindex=1
+
+[test]
+listen=0
+rpcbind=127.0.0.1
+rpcallowip=127.0.0.1
+rpcport=18211
+addnode=217.160.46.61:18210
+addnode=127.0.0.1:18210
+"@ | Set-Content -Path $Path -Encoding UTF8
+}
+
+function Wait-ForPublicChain {
+    param([int]$TimeoutSec = 120)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        $peers = [int](Invoke-Cli @("getconnectioncount"))
+        $height = [int](Invoke-Cli @("getblockcount"))
+        if ($peers -ge 1) {
+            if ($height -ge 1) {
+                $b1 = Invoke-Cli @("getblockhash", "1")
+                if ($b1 -ne $OfficialBlock1) {
+                    throw "Local block 1 is not the public testnet. Run .\resync-testnet.ps1 first."
+                }
+            }
+            return
+        }
+        Write-Host "Waiting for peer... (peers=$peers)"
+        Start-Sleep -Seconds 5
+    }
+    throw @"
+No connection to the public testnet (0 peers). Do NOT mine solo — that creates a fork.
+
+1. Start WSL bridge (PowerShell):
+   wsl -e bash -lc '/home/marlon/blockzero-core/build/bin/bitcoind -testnet -datadir=/home/marlon/.bzero -daemon'
+2. Resync:
+   .\resync-testnet.ps1
+3. Mine:
+   .\mine-testnet.ps1
+"@
+}
+
 if ($Stop) {
     try { Invoke-Cli @("stop") | Out-Null; Write-Host "bitcoind stopped." }
     catch { Write-Host "bitcoind was not running." }
@@ -44,17 +89,7 @@ if (-not (Test-Path $DataDir)) {
 
 $conf = Join-Path $DataDir "bitcoin.conf"
 if (-not (Test-Path $conf)) {
-    @"
-server=1
-txindex=1
-
-[test]
-listen=0
-rpcbind=127.0.0.1
-rpcallowip=127.0.0.1
-rpcport=18211
-addnode=217.160.46.61:18210
-"@ | Set-Content -Path $conf -Encoding UTF8
+    Write-DefaultConf $conf
     Write-Host "Created $conf"
 }
 
@@ -67,26 +102,40 @@ if (-not $running) {
     Start-Sleep -Seconds 20
 }
 
-try { Invoke-Cli @("loadwallet", $WalletName) 2>$null | Out-Null } catch {}
+Wait-ForPublicChain
+
+$walletLoaded = $false
 try {
-    Invoke-Cli @("createwallet", $WalletName) | Out-Null
-    Write-Host "Created wallet '$WalletName'."
-} catch {
-    # wallet may already exist
+    Invoke-Cli @("loadwallet", $WalletName) | Out-Null
+    $walletLoaded = $true
+} catch {}
+
+if (-not $walletLoaded) {
+    try {
+        Invoke-Cli @("createwallet", $WalletName) | Out-Null
+        Write-Host "Created wallet '$WalletName'."
+    } catch {
+        Write-Host "Wallet '$WalletName' already loaded or in use."
+    }
 }
 
 $addr = Invoke-Cli @("-rpcwallet=$WalletName", "getnewaddress")
 $height = Invoke-Cli @("getblockcount")
+$peers = Invoke-Cli @("getconnectioncount")
 
 if ($Status) {
     $bal = Invoke-Cli @("-rpcwallet=$WalletName", "getbalances") | ConvertFrom-Json
+    Write-Host "Peers: $peers"
     Write-Host "Height: $height"
     Write-Host "Mining address: $addr"
     Write-Host "Immature TBLOZ: $($bal.mine.immature)"
+    if ([int]$height -ge 1) {
+        Write-Host "Block 1: $(Invoke-Cli @('getblockhash','1'))"
+    }
     exit 0
 }
 
-Write-Host "Chain height: $height"
+Write-Host "Peers: $peers | Chain height: $height"
 Write-Host "Mining to: $addr"
 Write-Host "Press Ctrl+C to stop mining (node keeps running). Use -Stop to shut down bitcoind."
 Write-Host ""

@@ -10,7 +10,7 @@
 set -euo pipefail
 
 BINDIR="${BZERO_BINDIR:-}"
-DATADIR="${BZERO_DATADIR:-${HOME}/.blockzero/testnet3}"
+DATADIR="${BZERO_DATADIR:-${HOME}/.blockzero}"
 WALLET="${BZERO_WALLET:-mining}"
 MAXTRIES="${BZERO_MAXTRIES:-500000000}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
