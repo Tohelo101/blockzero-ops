@@ -8,9 +8,57 @@ How to run a persistent, reachable Block Zero **testnet** node. Two host options
 
 P2P port: `18210` (testnet). RPC port: `18211` (local only).
 
+**Production seed:** `217.160.46.61:18210` on the IONOS VPS (`mail.marlonmorales.ch`).
+
 ---
 
-## A. The node (Linux / WSL2)
+## A. VPS seed (217.160.46.61) — always on
+
+Paths on the VPS:
+
+| Path | Purpose |
+|---|---|
+| `/opt/blockzero-core/build/bin/bitcoind` | binary |
+| `/opt/bzero-testnet/` | datadir + `bitcoin.conf` |
+| `/etc/systemd/system/blockzero-testnet.service` | systemd unit |
+
+Install or refresh the service (from your PC, as root):
+
+```bash
+ssh -i ~/.ssh/id_ed25519 root@217.160.46.61
+ufw allow 18210/tcp comment 'Block Zero testnet P2P'
+cp blockzero-ops/systemd/blockzero-testnet.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now blockzero-testnet
+```
+
+Health checks on the VPS:
+
+```bash
+systemctl status blockzero-testnet --no-pager
+ss -tlnp | grep 18210
+/opt/blockzero-core/build/bin/bitcoin-cli -testnet -datadir=/opt/bzero-testnet getblockchaininfo
+```
+
+### IONOS cloud firewall (required)
+
+The VPS uses an **IONOS cloud firewall policy** that filters traffic *before* ufw.
+Both must allow TCP **18210**:
+
+1. `my.ionos.de` → Server & Cloud → Netzwerk → Firewall-Richtlinien
+2. Open the policy assigned to server **MarlonMorales**
+3. Add inbound rule: TCP **18210**, source `0.0.0.0/0`
+
+Verify from your PC:
+
+```powershell
+.\scripts\testnet\check-seed.ps1
+# or: Test-NetConnection 217.160.46.61 -Port 18210
+```
+
+---
+
+## B. The node (Linux / WSL2 — home dev)
 
 ### Config
 
@@ -108,7 +156,7 @@ schtasks /Create /TN "BlockZeroTestnet" /TR "powershell -ExecutionPolicy Bypass 
 
 ---
 
-## D. Becoming a seed in chainparams
+## E. Becoming a seed in chainparams
 
 Once the node is reachable at a stable address (IP or dyndns hostname), add it to
 `src/kernel/chainparams.cpp` (testnet section) as a fixed/DNS seed and ship a release.
