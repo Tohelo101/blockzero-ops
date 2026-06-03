@@ -9,7 +9,10 @@ param(
     [string]$BinDir = "",
     [string]$DataDir = "$env:LOCALAPPDATA\BlockZero",
     [string]$WalletName = "mining",
-    [int]$MaxTries = 500000000,
+    # Tries per generatetoaddress call. Kept small on purpose: each call must be
+    # short so the loop regains control quickly and Ctrl+C leaves bitcoind idle
+    # (a huge value makes one uninterruptible call peg the CPU for a long time).
+    [int]$MaxTries = 500000,
     [switch]$Status,
     [switch]$Stop
 )
