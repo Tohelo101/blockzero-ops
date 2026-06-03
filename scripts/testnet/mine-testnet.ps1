@@ -287,24 +287,42 @@ if ($Status) {
     exit 0
 }
 
+# (Re)start bitcoind if it isn't running and wait until its RPC answers. Called
+# at the top of every mining iteration so the loop survives a node that was
+# killed mid-mine (e.g. RandomX OOM) instead of aborting the whole script.
+function Ensure-NodeUp {
+    if (-not (Get-Process bitcoind -ErrorAction SilentlyContinue)) {
+        Write-Host "$(Get-Date -Format 'HH:mm:ss') bitcoind not running - (re)starting..."
+        $daemon = Find-Exe "bitcoind.exe"
+        Start-Process -FilePath $daemon -ArgumentList "-testnet", "-datadir=$DataDir" -WindowStyle Hidden
+        Start-Sleep -Seconds 5
+    }
+    Wait-ForRpc
+}
+
 $addr = Get-OrCreate-MiningAddress $WalletName
 
 Write-Host "Peers: $peers | Chain height: $height"
 Write-Host "Mining to: $addr"
 Write-Host "Press Ctrl+C to stop mining (node keeps running). Use -Stop to shut down bitcoind."
+Write-Host "The loop self-heals: if the node drops out it is restarted automatically."
 Write-Host ""
 
 while ($true) {
-    $height = [int](Invoke-Cli @("getblockcount"))
-    Write-Host "$(Get-Date -Format 'HH:mm:ss') height=$height mining..."
-    $result = Invoke-Cli @("-rpcwallet=$WalletName", "generatetoaddress", "1", $addr, "$MaxTries")
-    if ($result -match '[0-9a-f]{64}') {
-        Write-Host "Block found: $result"
-        $height = Invoke-Cli @("getblockcount")
-        if ([int]$height -gt 0) {
+    try {
+        Ensure-NodeUp
+        $height = [int](Invoke-Cli @("getblockcount"))
+        Write-Host "$(Get-Date -Format 'HH:mm:ss') height=$height mining..."
+        $result = Invoke-Cli @("-rpcwallet=$WalletName", "generatetoaddress", "1", $addr, "$MaxTries")
+        if ($result -match '[0-9a-f]{64}') {
+            Write-Host "Block found: $result"
             $bal = Invoke-Cli @("-rpcwallet=$WalletName", "getbalances") | ConvertFrom-Json
-            Write-Host "New height: $height | immature TBLOZ: $($bal.mine.immature)"
+            Write-Host "New height: $(Invoke-Cli @('getblockcount')) | immature TBLOZ: $($bal.mine.immature)"
         }
+    } catch {
+        $msg = ($_.Exception.Message -split "`n")[0].Trim()
+        Write-Host "$(Get-Date -Format 'HH:mm:ss') mining hiccup ($msg) - recovering..."
+        Start-Sleep -Seconds 5
     }
     Start-Sleep -Seconds 2
 }
