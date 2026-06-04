@@ -17,8 +17,9 @@ param(
     [switch]$Stop
 )
 
+. "$PSScriptRoot\chain-identity.ps1"
+
 $ErrorActionPreference = "Stop"
-$OfficialBlock1 = "7a28c3b91ddd8404a13a2557eb0e1f8bee664ffc7e7a0a90fb4473f762e6ec79"
 
 function Find-Exe([string]$Name) {
     if ($BinDir) {
@@ -153,14 +154,19 @@ function Get-OrCreate-MiningAddress([string]$Name) {
     return $addr.Trim()
 }
 
-function Get-RewardSummary([string]$Name) {
-    $coins = @(Invoke-Cli @("-rpcwallet=$Name", "listunspent", "0", "9999999") | ConvertFrom-Json)
-    $immature = @($coins | Where-Object { $_.confirmations -lt 100 -and $_.confirmations -ge 0 })
-    $byAddr = $immature | Group-Object address
+function Get-RewardSummary([string]$Name, [object]$Bal) {
+    $blockReward = 50
     return @{
-        BlockCount = $immature.Count
-        Addresses  = @($byAddr | ForEach-Object { $_.Name })
+        ImmatureBlockCount = [int]([decimal]$Bal.mine.immature / $blockReward)
+        MatureBlockCount   = [int]([decimal]$Bal.mine.trusted / $blockReward)
     }
+}
+
+function Format-WalletBalance([object]$Bal) {
+    $mature = [decimal]$Bal.mine.trusted
+    $immature = [decimal]$Bal.mine.immature
+    $total = $mature + $immature
+    return "mature: $mature TBLOZ, immature: $immature TBLOZ, total: $total TBLOZ"
 }
 
 function Wait-ForRpc {
@@ -190,16 +196,13 @@ function Wait-ForPublicChain {
         $peers = [int]$pc.Text
         $height = [int]$hc.Text
         if ($peers -ge 1) {
-            if ($height -ge 1) {
-                $bh = Try-Invoke-Cli @("getblockhash", "1")
-                if (-not $bh.Ok) {
-                    # node still warming up its block index; retry
-                    Start-Sleep -Seconds 3
-                    continue
-                }
-                if ($bh.Text -ne $OfficialBlock1) {
-                    throw "Local block 1 is not the public testnet. Run .\resync-testnet.ps1 first."
-                }
+            $gh = Try-Invoke-Cli @("getblockhash", "0")
+            if (-not $gh.Ok) {
+                Start-Sleep -Seconds 3
+                continue
+            }
+            if ($OfficialGenesis -notlike "PENDING*" -and $gh.Text -ne $OfficialGenesis) {
+                throw "Local genesis is not the public testnet v2. Run .\resync-testnet.ps1 first."
             }
             return
         }
@@ -266,12 +269,9 @@ $peers = Invoke-Cli @("getconnectioncount")
 
 if ($Status) {
     $bal = Invoke-Cli @("-rpcwallet=$WalletName", "getbalances") | ConvertFrom-Json
-    $rewards = Get-RewardSummary $WalletName
+    $rewards = Get-RewardSummary $WalletName $bal
     $addrFile = Get-MiningAddressFile
     $activeAddr = if (Test-Path $addrFile) { (Get-Content $addrFile -Raw).Trim() } else { "" }
-    if (-not $activeAddr -and $rewards.BlockCount -gt 0) {
-        $activeAddr = ($rewards.Addresses | Select-Object -Last 1)
-    }
     Write-Host "Peers: $peers"
     Write-Host "Height: $height"
     if ($activeAddr) {
@@ -279,11 +279,10 @@ if ($Status) {
     } else {
         Write-Host "Mining address: (not set yet - run .\mine-testnet.ps1 once)"
     }
-    if ($rewards.BlockCount -gt 0) {
-        Write-Host "Blocks mined (immature): $($rewards.BlockCount)"
+    if ($rewards.MatureBlockCount -gt 0 -or $rewards.ImmatureBlockCount -gt 0) {
+        Write-Host "Blocks mined: $($rewards.MatureBlockCount) mature + $($rewards.ImmatureBlockCount) immature (100-block wait)"
     }
-    Write-Host "Immature TBLOZ: $($bal.mine.immature)"
-    Write-Host "Trusted TBLOZ: $($bal.mine.trusted)"
+    Write-Host (Format-WalletBalance $bal)
     if ([int]$height -ge 1) {
         Write-Host "Block 1: $(Invoke-Cli @('getblockhash','1'))"
     }
@@ -307,8 +306,11 @@ $addr = Get-OrCreate-MiningAddress $WalletName
 
 Write-Host "Peers: $peers | Chain height: $height"
 Write-Host "Mining to: $addr"
+$startBal = Invoke-Cli @("-rpcwallet=$WalletName", "getbalances") | ConvertFrom-Json
+Write-Host "Balance: $(Format-WalletBalance $startBal)"
 Write-Host "Press Ctrl+C to stop mining (node keeps running). Use -Stop to shut down bitcoind."
 Write-Host "The loop self-heals: if the node drops out it is restarted automatically."
+Write-Host "Coinbase rewards mature after 100 blocks - expect ~5000 TBLOZ immature while actively mining."
 Write-Host ""
 
 while ($true) {
@@ -320,7 +322,9 @@ while ($true) {
         if ($result -match '[0-9a-f]{64}') {
             Write-Host "Block found: $result"
             $bal = Invoke-Cli @("-rpcwallet=$WalletName", "getbalances") | ConvertFrom-Json
-            Write-Host "New height: $(Invoke-Cli @('getblockcount')) | immature TBLOZ: $($bal.mine.immature)"
+            $newHeight = Invoke-Cli @('getblockcount')
+            $balLine = Format-WalletBalance $bal
+            Write-Host "New height: $newHeight; $balLine"
         }
     } catch {
         $msg = ($_.Exception.Message -split "`n")[0].Trim()

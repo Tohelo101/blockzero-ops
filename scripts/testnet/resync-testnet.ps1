@@ -10,15 +10,20 @@ param(
     [string]$BinDir = "$env:LOCALAPPDATA\BlockZero\bin"
 )
 
+. "$PSScriptRoot\chain-identity.ps1"
+
 $ErrorActionPreference = "Stop"
-$OfficialGenesis = "f58130b19cdf3d03b22c5a67a6509b00750b2d8975ee9d889d5b613aaae5296e"
-$OfficialBlock1 = "7a28c3b91ddd8404a13a2557eb0e1f8bee664ffc7e7a0a90fb4473f762e6ec79"
 
 $cli = Join-Path $BinDir "bitcoin-cli.exe"
 $daemon = Join-Path $BinDir "bitcoind.exe"
 
 Write-Host "Block Zero testnet resync"
 Write-Host "Datadir: $DataDir"
+if ($OfficialGenesis -like "PENDING*") {
+    Write-Host ""
+    Write-Host "WARNING: chain-identity.ps1 still has a placeholder genesis hash."
+    Write-Host "Mine testnet v2 first — see blockzero-docs/testnet-v2-reset.md"
+}
 Write-Host ""
 
 if (Get-Process bitcoind -ErrorAction SilentlyContinue) {
@@ -58,21 +63,16 @@ while ((Get-Date) -lt $deadline) {
         $height = [int](& $cli -testnet -datadir="$DataDir" -rpcport=18211 getblockcount)
         $genesis = & $cli -testnet -datadir="$DataDir" -rpcport=18211 getblockhash 0
         Write-Host "  peers=$peers height=$height"
-        if ($peers -ge 1 -and $genesis -eq $OfficialGenesis) {
-            if ($height -ge 1) {
-                $b1 = & $cli -testnet -datadir="$DataDir" -rpcport=18211 getblockhash 1
-                if ($b1 -eq $OfficialBlock1) {
-                    Write-Host ""
-                    Write-Host "Synced to public testnet at height $height."
-                    Write-Host "Block 1: $b1"
-                    exit 0
-                }
-            }
-            if ($height -eq 0 -and $peers -ge 1) {
-                Write-Host ""
-                Write-Host "Connected to network at genesis. Safe to mine block 1 on the public chain."
-                exit 0
-            }
+        if ($peers -ge 1 -and $OfficialGenesis -notlike "PENDING*" -and $genesis -eq $OfficialGenesis) {
+            Write-Host ""
+            Write-Host "Synced to public testnet v2 at height $height."
+            Write-Host "Genesis: $genesis"
+            exit 0
+        }
+        if ($peers -ge 1 -and $height -eq 0) {
+            Write-Host ""
+            Write-Host "Connected at genesis (height 0). Safe to mine block 1 on the public chain."
+            exit 0
         }
     } catch {
         Write-Host "  waiting for RPC..."
