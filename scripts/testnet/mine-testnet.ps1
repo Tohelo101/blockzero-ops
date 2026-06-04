@@ -1,4 +1,4 @@
-# Block Zero testnet miner (Windows, native binaries — NOT WSL)
+# Block Zero testnet miner (Windows, native binaries - NOT WSL)
 # Usage:
 #   .\mine-testnet.ps1              # sync check + mine on public testnet
 #   .\mine-testnet.ps1 -Status      # show height, peers, balance
@@ -201,16 +201,16 @@ function Wait-ForPublicChain {
                 Start-Sleep -Seconds 3
                 continue
             }
-            if ($OfficialGenesis -notlike "PENDING*" -and $gh.Text -ne $OfficialGenesis) {
-                throw "Local genesis is not the public testnet v2. Run .\resync-testnet.ps1 first."
-            }
+                if ($OfficialGenesis -notlike "PENDING*" -and $gh.Text -ne $OfficialGenesis) {
+                    throw "Local genesis does not match the public testnet. Run .\resync-testnet.ps1 first."
+                }
             return
         }
         Write-Host "Waiting for peer... (peers=$peers)"
         Start-Sleep -Seconds 5
     }
     throw @"
-No connection to the public testnet (0 peers). Do NOT mine solo — that creates a fork.
+No connection to the public testnet (0 peers). Do NOT mine solo - that creates a fork.
 
 1. Start WSL bridge (PowerShell):
    wsl -e bash -lc '/home/marlon/blockzero-core/build/bin/bitcoind -testnet -datadir=/home/marlon/.bzero -daemon'

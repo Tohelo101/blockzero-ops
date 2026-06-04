@@ -22,7 +22,7 @@ Write-Host "Datadir: $DataDir"
 if ($OfficialGenesis -like "PENDING*") {
     Write-Host ""
     Write-Host "WARNING: chain-identity.ps1 still has a placeholder genesis hash."
-    Write-Host "Mine testnet v2 first — see blockzero-docs/testnet-v2-reset.md"
+    Write-Host "Mine the testnet genesis first - see blockzero-docs/testnet-reset.md"
 }
 Write-Host ""
 
@@ -65,7 +65,7 @@ while ((Get-Date) -lt $deadline) {
         Write-Host "  peers=$peers height=$height"
         if ($peers -ge 1 -and $OfficialGenesis -notlike "PENDING*" -and $genesis -eq $OfficialGenesis) {
             Write-Host ""
-            Write-Host "Synced to public testnet v2 at height $height."
+            Write-Host "Synced to public testnet at height $height."
             Write-Host "Genesis: $genesis"
             exit 0
         }
