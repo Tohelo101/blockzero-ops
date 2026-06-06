@@ -35,6 +35,27 @@ function Get-MiningThreadsLabel() {
     return "$auto auto (min(cores, 16))"
 }
 
+function Format-Hashrate([double]$hps) {
+    if ($hps -ge 1000000) { return ("{0:N2} MH/s" -f ($hps / 1000000)) }
+    if ($hps -ge 1000)    { return ("{0:N1} kH/s" -f ($hps / 1000)) }
+    return ("{0:N0} H/s" -f $hps)
+}
+
+function Get-LocalMiningStats {
+    # Returns the most recent round's measured hashrate (rc6+ nodes). Older
+    # binaries omit the field, so we return $null and callers stay quiet.
+    try {
+        $mi = Invoke-Cli @("getmininginfo") | ConvertFrom-Json
+        if ($null -eq $mi.localhashps) { return $null }
+        return [pscustomobject]@{
+            Hps     = [double]$mi.localhashps
+            Hashes  = [double]$mi.localhashes
+            Seconds = [double]$mi.localhashseconds
+            Fast    = [bool]$mi.localfastmode
+        }
+    } catch { return $null }
+}
+
 function Find-Exe([string]$Name) {
     if ($BinDir) {
         $p = Join-Path $BinDir $Name
@@ -207,6 +228,58 @@ function Wait-ForPublicChain {
     throw "No connection to the public mainnet (0 peers). Do NOT mine solo - that creates a fork. Run .\resync-mainnet.ps1."
 }
 
+function Get-ChainSyncState {
+    $bi = Invoke-Cli @("getblockchaininfo") | ConvertFrom-Json
+    return @{
+        Blocks  = [int]$bi.blocks
+        Headers = [int]$bi.headers
+        Lag     = [int]$bi.headers - [int]$bi.blocks
+    }
+}
+
+function Get-ExplorerTip {
+    try {
+        $r = Invoke-WebRequest -Uri "https://explorer.bloz.org/api/blocks/tip/height" -UseBasicParsing -TimeoutSec 8
+        return [int]($r.Content.Trim())
+    } catch {
+        return $null
+    }
+}
+
+function Get-NetworkTip {
+    $peerTip = 0
+    try {
+        $peers = Invoke-Cli @("getpeerinfo") | ConvertFrom-Json
+        foreach ($p in $peers) {
+            if ($p.synced_headers -and [int]$p.synced_headers -gt $peerTip) {
+                $peerTip = [int]$p.synced_headers
+            }
+        }
+    } catch {}
+    $explorerTip = Get-ExplorerTip
+    if ($explorerTip -and $explorerTip -gt $peerTip) { return $explorerTip }
+    if ($peerTip -gt 0) { return $peerTip }
+    return $null
+}
+
+function Wait-ForTip {
+    param([int]$MaxLag = 0, [int]$MaxNetworkLag = 0)
+    while ($true) {
+        $s = Get-ChainSyncState
+        $networkTip = Get-NetworkTip
+        $networkBehind = if ($networkTip) { $networkTip - $s.Blocks } else { 0 }
+        if ($s.Lag -le $MaxLag -and $networkBehind -le $MaxNetworkLag) {
+            return $s.Blocks
+        }
+        if ($s.Lag -gt $MaxLag) {
+            Write-Host "$(Get-Date -Format 'HH:mm:ss') catching up: height=$($s.Blocks) headers=$($s.Headers) lag=$($s.Lag)..."
+        } else {
+            Write-Host "$(Get-Date -Format 'HH:mm:ss') catching up network: height=$($s.Blocks) network=$networkTip behind=$networkBehind..."
+        }
+        Start-Sleep -Seconds 5
+    }
+}
+
 if ($Stop) {
     try { Invoke-Cli @("stop") | Out-Null; Write-Host "Stopping bitcoind..." }
     catch { Write-Host "bitcoind was not running (RPC)."; }
@@ -284,6 +357,11 @@ if ($Status) {
     $activeAddr = if (Test-Path $addrFile) { (Get-Content $addrFile -Raw).Trim() } else { "" }
     Write-Host "Peers: $peers"
     Write-Host "Height: $height"
+    $stats = Get-LocalMiningStats
+    if ($stats -and $stats.Hps -gt 0) {
+        $mode = if ($stats.Fast) { "fast" } else { "light" }
+        Write-Host "Local hashrate (last round): $(Format-Hashrate $stats.Hps) [$mode mode]"
+    }
     if ($activeAddr) {
         Write-Host "Mining address: $activeAddr"
     } else {
@@ -319,9 +397,14 @@ Write-Host ""
 while ($true) {
     try {
         Ensure-NodeUp
-        $height = [int](Invoke-Cli @("getblockcount"))
+        $height = Wait-ForTip
         Write-Host "$(Get-Date -Format 'HH:mm:ss') height=$height mining..."
         $result = Invoke-Cli (Get-GenerateToAddressArgs $WalletName $addr)
+        $stats = Get-LocalMiningStats
+        if ($stats -and $stats.Hps -gt 0) {
+            $mode = if ($stats.Fast) { "fast" } else { "light" }
+            Write-Host "$(Get-Date -Format 'HH:mm:ss') hashrate: $(Format-Hashrate $stats.Hps) [$mode] ($([math]::Round($stats.Hashes/1000000,2))M hashes in $([math]::Round($stats.Seconds,1))s)"
+        }
         if ($result -match '[0-9a-f]{64}') {
             Write-Host "Block found: $result"
             $bal = Invoke-Cli @("-rpcwallet=$WalletName", "getbalances") | ConvertFrom-Json
