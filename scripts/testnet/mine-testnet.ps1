@@ -283,11 +283,32 @@ if (-not (Test-Path $conf)) {
 }
 
 $daemon = Find-Exe "bitcoind.exe"
-$running = Get-Process bitcoind -ErrorAction SilentlyContinue
 
-if (-not $running) {
+# Decide based on RPC responsiveness, not just process presence: a bitcoind
+# stuck in the slow RandomX shutdown is still alive but serves no RPC, which
+# would otherwise make us wait on a dead node instead of starting a fresh one.
+# Probe for ~20s so we never kill a healthy node that is just briefly busy
+# validating an incoming block (RandomX verification blocks RPC momentarily).
+$rpcUp = $false
+if (Get-Process bitcoind -ErrorAction SilentlyContinue) {
+    for ($i = 0; $i -lt 10; $i++) {
+        if ((Try-Invoke-Cli @("getblockcount")).Ok) { $rpcUp = $true; break }
+        Start-Sleep -Seconds 2
+    }
+}
+if (-not $rpcUp) {
+    $stale = Get-Process bitcoind -ErrorAction SilentlyContinue
+    if ($stale) {
+        Write-Host "A bitcoind is running but not responding (likely shutting down) - clearing it..."
+        $stale | Stop-Process -Force
+        $deadline = (Get-Date).AddSeconds(60)
+        while ((Get-Process bitcoind -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 2
+        }
+        Remove-Item (Join-Path $DataDir "testnet3\.lock") -ErrorAction SilentlyContinue
+    }
     Write-Host "Starting bitcoind (native Windows, testnet)..."
-    Start-Process -FilePath $daemon -ArgumentList "-testnet", "-datadir=$DataDir" -WindowStyle Hidden
+    Start-Process -FilePath $daemon -ArgumentList "-testnet", "-datadir=`"$DataDir`"" -WindowStyle Hidden
     Start-Sleep -Seconds 5
 }
 
