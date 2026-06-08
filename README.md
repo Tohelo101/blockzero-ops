@@ -8,12 +8,23 @@ Fair launch. Proof-of-work. No presale. No insiders.
 
 ---
 
-## Mine testnet in one command
+## Mine mainnet in one command
 
 | Platform | Script |
 |----------|--------|
-| **Windows** | [`install-windows.ps1`](scripts/testnet/install-windows.ps1) → [`resync-testnet.ps1`](scripts/testnet/resync-testnet.ps1) → [`mine-testnet.ps1`](scripts/testnet/mine-testnet.ps1) |
-| **Linux / macOS** | [`scripts/testnet/install-unix.sh`](scripts/testnet/install-unix.sh) → [`mine-testnet.sh`](scripts/testnet/mine-testnet.sh) |
+| **Windows** | [`install-windows.ps1`](scripts/testnet/install-windows.ps1) (binaries) → [`mine-mainnet.ps1`](scripts/mainnet/mine-mainnet.ps1) |
+| **Linux / macOS** | Build from [blockzero-core Releases](https://github.com/Rexemre/blockzero-core/releases), then use [`scripts/mainnet/`](scripts/mainnet/) |
+
+**Public seed:** `217.160.46.61:8210` · **Explorer:** https://explorer.bloz.org
+
+```powershell
+git clone https://github.com/Rexemre/blockzero-ops.git
+cd blockzero-ops\scripts\testnet
+.\install-windows.ps1
+cd ..\mainnet
+.\mine-mainnet.ps1 -Status   # sync first — never mine with 0 peers
+.\mine-mainnet.ps1
+```
 
 Downloads prebuilt binaries from [blockzero-core Releases](https://github.com/Rexemre/blockzero-core/releases).  
 **Use native Windows binaries for mining** — WSL2 RandomX is ~10× slower.
@@ -24,14 +35,16 @@ Full walkthrough: [blockzero-docs/quickstart-mining.md](https://github.com/Rexem
 
 ## Runbooks
 
-- [Testnet Seed Node](runbooks/testnet-seed-node.md) — run a persistent, reachable testnet peer
+- [Mainnet Seed Node](runbooks/mainnet-seed-node.md) — run a persistent, reachable mainnet peer
+- [Mainnet Explorer](runbooks/mainnet-explorer.md) — btc-rpc-explorer for BLOZ
+- [Testnet Seed Node](runbooks/testnet-seed-node.md) — testnet peer (TBLOZ, dev/testing)
 - [`scripts/wsl-portproxy.ps1`](scripts/wsl-portproxy.ps1) — Windows→WSL port proxy (dev only)
 
 ---
 
 ## Scope
 
-- Public seed nodes and network bootstrap
+- Public seed nodes and network bootstrap (mainnet + testnet)
 - Release checklists and CI
 - Monitoring, incident response, postmortems
 
