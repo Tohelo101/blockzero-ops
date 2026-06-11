@@ -15,6 +15,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <csignal>
 #include <cstdio>
 #include <cstring>
@@ -45,12 +46,28 @@ struct RxDataset {
 };
 
 randomx_flags MiningFlags() {
-    randomx_flags flags = randomx_get_flags();
+    // Determined once: JIT is ~10x faster than the interpreter. On Windows the
+    // SECURE flag keeps JIT pages W^X-safe (plain JIT crashes under DEP).
+    static const randomx_flags cached = [] {
+        randomx_flags flags = randomx_get_flags();
 #ifdef _WIN32
-    // JIT can crash on some Windows setups; compiled mode is slower but stable.
-    flags = static_cast<randomx_flags>(flags & ~RANDOMX_FLAG_JIT);
+        if (flags & RANDOMX_FLAG_JIT) {
+            flags = static_cast<randomx_flags>(flags | RANDOMX_FLAG_SECURE);
+        }
 #endif
-    return flags;
+        if (flags & RANDOMX_FLAG_JIT) {
+            randomx_cache* probe = randomx_alloc_cache(flags);
+            if (probe) {
+                randomx_release_cache(probe);
+            } else {
+                // JIT allocation refused (hardened system) - interpreter fallback.
+                flags = static_cast<randomx_flags>(
+                    flags & ~(RANDOMX_FLAG_JIT | RANDOMX_FLAG_SECURE));
+            }
+        }
+        return flags;
+    }();
+    return cached;
 }
 
 struct ActiveJob {
@@ -60,7 +77,7 @@ struct ActiveJob {
     randomx_flags flags{};
     std::shared_ptr<RxCache> cache;
     std::string rx_key_hex;
-    uint64_t generation{0}; // bumped when the dataset becomes available
+    uint64_t vm_generation{0}; // bumped when cache/dataset epoch changes
 };
 
 std::mutex g_job_mu;
@@ -116,7 +133,7 @@ void BuildDatasetAsync(std::shared_ptr<RxCache> cache, std::string key_hex, rand
         }
         {
             std::lock_guard<std::mutex> lock(g_job_mu);
-            if (g_job.rx_key_hex == key_hex) ++g_job.generation;
+            if (g_job.rx_key_hex == key_hex) ++g_job.vm_generation;
         }
         const double sec =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
@@ -157,13 +174,16 @@ bool ApplyJob(const pool::MiningJob& mj) {
 
     {
         std::lock_guard<std::mutex> lock(g_job_mu);
+        const bool epoch_changed = g_job.rx_key_hex != mj.rx_key_hex;
         g_job.id = mj.job_id;
         g_job.header_prefix = std::move(prefix);
-        g_job.flags = flags;
-        g_job.cache = cache_holder;
-        g_job.rx_key_hex = mj.rx_key_hex;
-        ++g_job.generation;
         pool::HexToTargetBe(mj.pool_target_hex, g_job.pool_target_be);
+        if (epoch_changed || !g_job.cache) {
+            g_job.flags = flags;
+            g_job.cache = cache_holder;
+            g_job.rx_key_hex = mj.rx_key_hex;
+            ++g_job.vm_generation;
+        }
     }
 
     // Kick off (or refresh) the fast-mode dataset for this epoch key.
@@ -186,79 +206,83 @@ bool ApplyJob(const pool::MiningJob& mj) {
 void GrindThread(int thread_id, int thread_count) {
     std::vector<uint8_t> header(80);
     uint8_t hash[32];
+    randomx_vm* vm = nullptr;
+    uint64_t vm_generation = UINT64_MAX;
+    std::shared_ptr<RxCache> cache_holder;
+    std::shared_ptr<RxDataset> vm_dataset; // must outlive the VM that uses it
+    randomx_flags flags{};
+    std::string key_hex;
+    std::string cur_job;
+    uint64_t nonce = static_cast<uint32_t>(thread_id);
+    const uint64_t step = static_cast<uint64_t>(thread_count);
 
     while (!g_stop.load()) {
         std::string job_id;
-        uint64_t generation;
-        std::vector<uint8_t> header_prefix;
         uint8_t pool_target_be[32]{};
-        randomx_flags flags{};
-        std::shared_ptr<RxCache> cache_holder;
-        std::shared_ptr<RxDataset> dataset_holder;
-        std::string key_hex;
-
         {
             std::lock_guard<std::mutex> lock(g_job_mu);
             if (!g_job.cache || g_job.header_prefix.size() < 76) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 continue;
             }
-            job_id = g_job.id;
-            generation = g_job.generation;
-            header_prefix = g_job.header_prefix;
-            std::memcpy(pool_target_be, g_job.pool_target_be, 32);
-            flags = g_job.flags;
-            cache_holder = g_job.cache;
-            key_hex = g_job.rx_key_hex;
-        }
-        {
-            std::lock_guard<std::mutex> lock(g_ds_mu);
-            if (g_dataset && g_dataset_key == key_hex) dataset_holder = g_dataset;
-        }
-
-        randomx_vm* vm = nullptr;
-        if (dataset_holder) {
-            vm = randomx_create_vm(static_cast<randomx_flags>(flags | RANDOMX_FLAG_FULL_MEM),
-                                   nullptr, dataset_holder->ptr);
-        }
-        if (!vm) {
-            dataset_holder.reset();
-            vm = randomx_create_vm(flags, cache_holder->ptr, nullptr);
-        }
-        if (!vm) {
-            std::cerr << "RandomX VM init failed on thread " << thread_id << "\n";
-            std::this_thread::sleep_for(std::chrono::milliseconds(250));
-            continue;
-        }
-
-        std::memcpy(header.data(), header_prefix.data(), 76);
-        uint64_t nonce = static_cast<uint32_t>(thread_id);
-        const uint64_t step = static_cast<uint64_t>(thread_count);
-
-        while (!g_stop.load()) {
-            {
-                std::lock_guard<std::mutex> lock(g_job_mu);
-                // Re-snapshot on new job OR when the dataset became ready.
-                if (g_job.id != job_id || g_job.generation != generation) break;
-            }
-
-            for (int burst = 0; burst < 500; ++burst) {
-                const uint32_t n = static_cast<uint32_t>(nonce);
-                std::memcpy(header.data() + 76, &n, 4);
-                randomx_calculate_hash(vm, header.data(), header.size(), hash);
-
-                if (pool::HashMeetsTarget(hash, pool_target_be)) {
-                    std::cout << "Share found (nonce=" << n << ") - submitting...\n";
-                    std::cout.flush();
-                    if (g_client) g_client->SubmitShare(job_id, n);
+            // VM rebuild only on epoch change or when the dataset became ready.
+            if (g_job.vm_generation != vm_generation) {
+                if (vm) {
+                    randomx_destroy_vm(vm);
+                    vm = nullptr;
                 }
-                nonce += step;
+                vm_dataset.reset();
+                flags = g_job.flags;
+                cache_holder = g_job.cache;
+                key_hex = g_job.rx_key_hex;
+                vm_generation = g_job.vm_generation;
             }
-            g_hashes.fetch_add(500, std::memory_order_relaxed);
+            job_id = g_job.id;
+            if (job_id != cur_job) {
+                cur_job = job_id;
+                std::memcpy(header.data(), g_job.header_prefix.data(), 76);
+                nonce = static_cast<uint32_t>(thread_id);
+            }
+            std::memcpy(pool_target_be, g_job.pool_target_be, 32);
         }
 
-        randomx_destroy_vm(vm);
+        if (!vm) {
+            {
+                std::lock_guard<std::mutex> lock(g_ds_mu);
+                if (g_dataset && g_dataset_key == key_hex) vm_dataset = g_dataset;
+            }
+            if (vm_dataset) {
+                vm = randomx_create_vm(static_cast<randomx_flags>(flags | RANDOMX_FLAG_FULL_MEM),
+                                       nullptr, vm_dataset->ptr);
+            }
+            if (!vm) {
+                vm_dataset.reset();
+                vm = randomx_create_vm(flags, cache_holder->ptr, nullptr);
+            }
+            if (!vm) {
+                std::cerr << "RandomX VM init failed on thread " << thread_id << "\n";
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                continue;
+            }
+        }
+
+        int done = 0;
+        for (; done < 500 && !g_stop.load(); ++done) {
+            const uint32_t n = static_cast<uint32_t>(nonce);
+            std::memcpy(header.data() + 76, &n, 4);
+            randomx_calculate_hash(vm, header.data(), header.size(), hash);
+
+            if (pool::HashMeetsTarget(hash, pool_target_be)) {
+                std::cout << "Share found (nonce=" << n << ") - submitting...\n";
+                std::cout.flush();
+                if (g_client) g_client->SubmitShare(job_id, n);
+            }
+            nonce += step;
+        }
+        g_hashes.fetch_add(static_cast<uint64_t>(done), std::memory_order_relaxed);
     }
+
+    if (vm) randomx_destroy_vm(vm);
 }
 
 void ReportThread() {
