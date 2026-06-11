@@ -13,8 +13,9 @@ Fair launch. Proof-of-work. No presale. No insiders.
 | Platform | Script |
 |----------|--------|
 | **Windows (pool)** | [`install-windows.ps1`](scripts/mainnet/install-windows.ps1) → [`mine-mainnet.ps1 -Pool`](scripts/mainnet/mine-mainnet.ps1) or [`mine-pool.bat`](scripts/mainnet/mine-pool.bat) |
+| **Linux / macOS (pool)** | [`mine-pool.sh`](scripts/mainnet/mine-pool.sh) — `./mine-pool.sh bz1YOURADDRESS` |
 | **Windows (solo)** | [`install-windows.ps1`](scripts/mainnet/install-windows.ps1) → [`mine-mainnet.ps1`](scripts/mainnet/mine-mainnet.ps1) |
-| **Linux / macOS** | Build from [blockzero-core Releases](https://github.com/Rexemre/blockzero-core/releases), then use [`scripts/mainnet/`](scripts/mainnet/) |
+| **Linux / macOS (solo)** | Build from [blockzero-core Releases](https://github.com/Rexemre/blockzero-core/releases), then use [`scripts/mainnet/`](scripts/mainnet/) |
 
 **Public seed:** `217.160.46.61:8210` · **Explorer:** https://explorer.bloz.org
 
