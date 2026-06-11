@@ -70,17 +70,40 @@ otherwise pass your `bz1` address as the first argument.
 | Password | none (`x` by convention, ignored) |
 | Threads | auto = all cores − 1; max 64 |
 
+## Pool transparency
+
+| Item | Value |
+|------|-------|
+| Pool payout address | `bz1qxp5dek9uq4hzemeg9cv0f8hfm3hl35kxunfkma` |
+| Explorer | [View on explorer.bloz.org](https://explorer.bloz.org/address/bz1qxp5dek9uq4hzemeg9cv0f8hfm3hl35kxunfkma) |
+| Pool engine source | [blockzero-pool (GitHub)](https://github.com/Rexemre/blockzero-pool) |
+| Miner source | [blockzero-ops/pool/native](https://github.com/Rexemre/blockzero-ops/tree/main/pool/native) |
+
+**How block rewards flow:**  
+When the pool finds a block, the coinbase (block reward) is paid to the pool payout address above.
+The pool engine immediately calculates each miner's PPLNS share and adds it to their pending balance.
+Payouts happen automatically once a miner's pending balance reaches 0.5 BLOZ — no claiming needed.
+
+The pool fee is 2% of each block reward. It stays in the pool address to cover server costs.
+The remaining 98% is distributed to miners proportionally based on their share of the PPLNS window.
+
 ## Miner behavior (v0.6+)
 
+- **Fast mode (default)** — builds a ~2 GB RandomX dataset in the background (~1 min). Mining continues in light mode during build. Hashrate jumps ~10× once the dataset is ready.
+- **Light mode** (`--light`) — 256 MB cache only, starts immediately at lower hashrate.
+- **JIT enabled on Windows** — RandomX JIT with SECURE pages (W^X) for full native speed.
 - Survives connection drops: reconnects and re-subscribes automatically
-- RandomX cache reused across jobs within an epoch (no re-init stall)
-- Reports total hashrate + accepted/rejected shares every 30s
-- Thread count is clamped (never a hard error)
+- RandomX cache reused across jobs within an epoch (no re-init stall per job)
+- VMs reused across job changes — only rebuilt on epoch key change or dataset ready
+- Reports total hashrate + accepted/rejected shares every 30 s
+- Thread count is clamped 1–64 (never a hard error)
 
 ## Troubleshooting
 
 - **No wallet (Windows)** — run `.\mine-mainnet.ps1 -Pool` (creates wallet on first run)
-- **No hashrate on the dashboard** — wait 2-5 min after the first `Share accepted`; the estimate needs a few shares
+- **No hashrate on dashboard** — wait 2–5 min after the first `Share accepted`; estimation needs a few shares
+- **Hashrate shows 0 then jumps** — normal: fast mode builds the 2 GB dataset for ~1 min first
 - **Change threads** — Windows: `-Threads 8` · Linux/macOS: `THREADS=8 ./mine-pool.sh`
 - **Pool connection error** — check firewall; the pool uses WSS on port 443
 - **macOS blocks the binary** — System Settings → Privacy & Security → Allow
+- **Share rejected: stale job** — update to pool miner v0.6.1+ (auto-updated by `mine-mainnet.ps1`)
