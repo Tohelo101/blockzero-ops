@@ -25,13 +25,16 @@ chmod +x mine-pool.sh
 ./mine-pool.sh bz1YOURADDRESS        # or just ./mine-pool.sh if you have a local wallet
 ```
 
+**Important:** pass **only your `bz1` payout address** — not `bz1…rig1`. The script builds the Stratum
+worker as `bz1YOURADDRESS.rigname` automatically (rig name = your hostname, or set `WORKER=rig2`).
+
 The script downloads the prebuilt miner (Linux x64 / macOS arm64) from
 [blockzero-ops releases](https://github.com/Rexemre/blockzero-ops/releases) and auto-restarts on crashes.
 
-Options (env vars): `THREADS=8 ./mine-pool.sh` · `WORKER=rig2 ./mine-pool.sh` · `FORCE=1` re-downloads the miner.
+Options (env vars): `THREADS=8 ./mine-pool.sh` · `WORKER=rig2 ./mine-pool.sh bz1…` · `FORCE=1` re-downloads the miner.
 
 No local wallet yet? The address is read from `~/.blockzero-mainnet/mining-address.txt` if present;
-otherwise pass your `bz1` address as the first argument.
+otherwise pass your `bz1` address as the first argument (address only, no `.rig` suffix).
 
 ## Commands (Windows)
 
@@ -66,7 +69,8 @@ otherwise pass your `bz1` address as the first argument.
 |---------|-------|
 | Dashboard | https://pool.bloz.org |
 | Stratum | `wss://pool.bloz.org/stratum` |
-| Worker | `bz1YOURADDRESS.rigname` (rig name = any label) |
+| Worker (Stratum) | `bz1YOURADDRESS.rigname` — built by the script; rig = hostname or `WORKER=` |
+| `mine-pool.sh` arg | **`bz1YOURADDRESS` only** — do not append `.rig1` yourself |
 | Password | none (`x` by convention, ignored) |
 | Threads | auto = all cores − 1; max 64 |
 
@@ -101,7 +105,9 @@ The remaining 98% is distributed to miners proportionally based on their share o
 ## Troubleshooting
 
 - **No wallet (Windows)** — run `.\mine-mainnet.ps1 -Pool` (creates wallet on first run)
+- **Not on the dashboard yet** — connected ≠ listed; you appear after the first **accepted share** (check terminal for `Share accepted`)
 - **No hashrate on dashboard** — wait 2–5 min after the first `Share accepted`; estimation needs a few shares
+- **Worker shows `.rig.rig` (doubled name)** — you passed `bz1…rig1` to `mine-pool.sh`; use address only: `./mine-pool.sh bz1…`
 - **Hashrate shows 0 then jumps** — normal: fast mode builds the 2 GB dataset for ~1 min first
 - **Change threads** — Windows: `-Threads 8` · Linux/macOS: `THREADS=8 ./mine-pool.sh`
 - **Pool connection error** — check firewall; the pool uses WSS on port 443

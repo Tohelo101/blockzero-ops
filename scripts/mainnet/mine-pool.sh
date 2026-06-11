@@ -3,9 +3,9 @@
 #
 # Usage:
 #   ./mine-pool.sh                      # auto: address from BlockZero wallet
-#   ./mine-pool.sh bz1YOURADDRESS      # explicit payout address
+#   ./mine-pool.sh bz1YOURADDRESS      # payout address only — rig name added automatically
 #   THREADS=8 ./mine-pool.sh            # custom thread count
-#   WORKER=rig2 ./mine-pool.sh          # custom rig name
+#   WORKER=rig2 ./mine-pool.sh bz1...   # optional custom rig name (default: hostname)
 #
 # First time? Create a wallet address with a local node:
 #   bitcoind -datadir=~/.blockzero-mainnet -daemon
@@ -46,6 +46,15 @@ case "$ADDRESS" in
     bz1*) ;;
     *) die "Payout address must start with bz1 (got: $ADDRESS)" ;;
 esac
+
+# bz1ADDRESS.rigname → split (Stratum format is not the script argument)
+if [[ "$ADDRESS" == bz1*.* ]]; then
+    parsed_rig="${ADDRESS#*.}"
+    ADDRESS="${ADDRESS%%.*}"
+    say "Note: pass only your bz1 address — the script adds the rig name."
+    say "      Using rig name \"$parsed_rig\" from your argument (override with WORKER=…)."
+    WORKER="$parsed_rig"
+fi
 
 # ---------- platform ----------
 OS="$(uname -s)"
