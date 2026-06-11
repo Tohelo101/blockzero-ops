@@ -8,6 +8,22 @@ Fair launch. Proof-of-work. No presale. No insiders.
 
 ---
 
+## Official links
+
+| | |
+|---|---|
+| **Website** | https://bloz.org |
+| **Pool** | https://pool.bloz.org *(test release)* |
+| **Explorer** | https://explorer.bloz.org · testnet: https://texplorer.bloz.org |
+| **Bridge** | https://bridge.bloz.org |
+| **Discord** | https://discord.gg/FbJzrwAU2W |
+| **X (Twitter)** | https://x.com/BlockZeroBLOZ |
+| **Full list** | [official-links.md](https://github.com/Rexemre/blockzero-docs/blob/main/official-links.md) |
+
+**Mainnet seed:** `217.160.46.61:8210`
+
+---
+
 ## Mine mainnet in one command
 
 | Platform | Script |
