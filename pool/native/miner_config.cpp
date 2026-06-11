@@ -122,6 +122,7 @@ bool LoadConfig(const std::string& path, MinerConfig& out) {
         else if (key == "BZ1_ADDRESS") cfg.bz1_address = value;
         else if (key == "WORKER_NAME") cfg.worker_name = value;
         else if (key == "THREADS") cfg.threads = std::atoi(value.c_str());
+        else if (key == "MODE") cfg.mode = value;
     }
 
     if (!IsValidAddress(cfg.bz1_address)) return false;
@@ -142,7 +143,8 @@ bool SaveConfig(const std::string& path, const MinerConfig& cfg) {
         << "POOL_URL=" << cfg.pool_url << "\n"
         << "BZ1_ADDRESS=" << cfg.bz1_address << "\n"
         << "WORKER_NAME=" << cfg.worker_name << "\n"
-        << "THREADS=" << threads << "\n";
+        << "THREADS=" << threads << "\n"
+        << "MODE=" << (cfg.mode == "light" ? "light" : "fast") << "\n";
 
     return static_cast<bool>(out);
 }

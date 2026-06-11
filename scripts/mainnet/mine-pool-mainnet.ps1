@@ -68,6 +68,8 @@ function Ensure-Installed {
 }
 
 function Save-PoolConfig([string]$Addr, [string]$Worker, [int]$ThreadCount) {
+    $mode = Read-ConfValue "MODE"
+    if ($mode -ne "light") { $mode = "fast" }
     @"
 # BLOZ pool miner - managed by blockzero-ops
 # Payout address comes from your BlockZero wallet (mining-address.txt)
@@ -75,6 +77,7 @@ POOL_URL=$PoolUrl
 BZ1_ADDRESS=$Addr
 WORKER_NAME=$Worker
 THREADS=$ThreadCount
+MODE=$mode
 "@ | Set-Content -Path $ConfPath -Encoding ASCII
 }
 

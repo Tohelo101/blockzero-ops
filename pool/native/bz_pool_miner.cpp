@@ -1,5 +1,10 @@
 // bz-pool-miner — native BLOZ pool miner (RandomX + Stratum/WSS)
 // Started by blockzero-ops: mine-mainnet.ps1 -Pool (Windows) / mine-pool.sh (Linux, macOS)
+//
+// Mining modes:
+//   fast  (default) — full ~2 GB RandomX dataset, ~10x faster. Falls back to
+//                     light automatically when memory is short.
+//   light           — 256 MB cache only (--light or MODE=light in miner.conf)
 
 #include "miner_config.hpp"
 #include "pow_util.hpp"
@@ -31,6 +36,14 @@ struct RxCache {
     }
 };
 
+struct RxDataset {
+    randomx_dataset* ptr{nullptr};
+    explicit RxDataset(randomx_dataset* ds) : ptr(ds) {}
+    ~RxDataset() {
+        if (ptr) randomx_release_dataset(ptr);
+    }
+};
+
 randomx_flags MiningFlags() {
     randomx_flags flags = randomx_get_flags();
 #ifdef _WIN32
@@ -47,13 +60,71 @@ struct ActiveJob {
     randomx_flags flags{};
     std::shared_ptr<RxCache> cache;
     std::string rx_key_hex;
+    uint64_t generation{0}; // bumped when the dataset becomes available
 };
 
 std::mutex g_job_mu;
 ActiveJob g_job;
+
+std::mutex g_ds_mu;
+std::shared_ptr<RxDataset> g_dataset;
+std::string g_dataset_key;
+std::atomic<bool> g_dataset_building{false};
+
 std::atomic<bool> g_stop{false};
 std::atomic<uint64_t> g_hashes{0};
+bool g_fast_mode = true;
+int g_threads = 1;
 pool::StratumClient* g_client{nullptr};
+
+void BuildDatasetAsync(std::shared_ptr<RxCache> cache, std::string key_hex, randomx_flags flags) {
+    std::thread([cache = std::move(cache), key_hex = std::move(key_hex), flags]() {
+        randomx_dataset* raw =
+            randomx_alloc_dataset(static_cast<randomx_flags>(flags | RANDOMX_FLAG_LARGE_PAGES));
+        if (!raw) raw = randomx_alloc_dataset(flags);
+        if (!raw) {
+            std::cout << "Fast mode unavailable (needs ~2.3 GB free RAM) - staying in light mode.\n";
+            std::cout.flush();
+            g_fast_mode = false; // don't retry every epoch
+            g_dataset_building.store(false);
+            return;
+        }
+
+        std::cout << "Initializing RandomX dataset (fast mode, ~1 min, mining continues)...\n";
+        std::cout.flush();
+        const auto t0 = std::chrono::steady_clock::now();
+
+        const unsigned long total = randomx_dataset_item_count();
+        const int n = std::max(1, g_threads);
+        std::vector<std::thread> workers;
+        workers.reserve(n);
+        const unsigned long chunk = total / n;
+        for (int i = 0; i < n; ++i) {
+            const unsigned long start = chunk * i;
+            const unsigned long count = (i == n - 1) ? (total - start) : chunk;
+            workers.emplace_back([raw, &cache, start, count]() {
+                randomx_init_dataset(raw, cache->ptr, start, count);
+            });
+        }
+        for (auto& w : workers) w.join();
+
+        auto holder = std::make_shared<RxDataset>(raw);
+        {
+            std::lock_guard<std::mutex> lock(g_ds_mu);
+            g_dataset = holder;
+            g_dataset_key = key_hex;
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_job_mu);
+            if (g_job.rx_key_hex == key_hex) ++g_job.generation;
+        }
+        const double sec =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("Fast mode active (dataset ready in %.0fs).\n", sec);
+        std::fflush(stdout);
+        g_dataset_building.store(false);
+    }).detach();
+}
 
 bool ApplyJob(const pool::MiningJob& mj) {
     auto prefix = pool::HexDecode(mj.header_prefix_hex);
@@ -91,7 +162,20 @@ bool ApplyJob(const pool::MiningJob& mj) {
         g_job.flags = flags;
         g_job.cache = cache_holder;
         g_job.rx_key_hex = mj.rx_key_hex;
+        ++g_job.generation;
         pool::HexToTargetBe(mj.pool_target_hex, g_job.pool_target_be);
+    }
+
+    // Kick off (or refresh) the fast-mode dataset for this epoch key.
+    if (g_fast_mode) {
+        bool need_build = false;
+        {
+            std::lock_guard<std::mutex> lock(g_ds_mu);
+            need_build = (g_dataset_key != mj.rx_key_hex);
+        }
+        if (need_build && !g_dataset_building.exchange(true)) {
+            BuildDatasetAsync(cache_holder, mj.rx_key_hex, flags);
+        }
     }
 
     std::cout << "New job: " << mj.job_id << " - mining.\n";
@@ -105,10 +189,13 @@ void GrindThread(int thread_id, int thread_count) {
 
     while (!g_stop.load()) {
         std::string job_id;
+        uint64_t generation;
         std::vector<uint8_t> header_prefix;
         uint8_t pool_target_be[32]{};
         randomx_flags flags{};
         std::shared_ptr<RxCache> cache_holder;
+        std::shared_ptr<RxDataset> dataset_holder;
+        std::string key_hex;
 
         {
             std::lock_guard<std::mutex> lock(g_job_mu);
@@ -117,13 +204,27 @@ void GrindThread(int thread_id, int thread_count) {
                 continue;
             }
             job_id = g_job.id;
+            generation = g_job.generation;
             header_prefix = g_job.header_prefix;
             std::memcpy(pool_target_be, g_job.pool_target_be, 32);
             flags = g_job.flags;
             cache_holder = g_job.cache;
+            key_hex = g_job.rx_key_hex;
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_ds_mu);
+            if (g_dataset && g_dataset_key == key_hex) dataset_holder = g_dataset;
         }
 
-        randomx_vm* vm = randomx_create_vm(flags, cache_holder->ptr, nullptr);
+        randomx_vm* vm = nullptr;
+        if (dataset_holder) {
+            vm = randomx_create_vm(static_cast<randomx_flags>(flags | RANDOMX_FLAG_FULL_MEM),
+                                   nullptr, dataset_holder->ptr);
+        }
+        if (!vm) {
+            dataset_holder.reset();
+            vm = randomx_create_vm(flags, cache_holder->ptr, nullptr);
+        }
         if (!vm) {
             std::cerr << "RandomX VM init failed on thread " << thread_id << "\n";
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
@@ -137,7 +238,8 @@ void GrindThread(int thread_id, int thread_count) {
         while (!g_stop.load()) {
             {
                 std::lock_guard<std::mutex> lock(g_job_mu);
-                if (g_job.id != job_id) break;
+                // Re-snapshot on new job OR when the dataset became ready.
+                if (g_job.id != job_id || g_job.generation != generation) break;
             }
 
             for (int burst = 0; burst < 500; ++burst) {
@@ -174,10 +276,16 @@ void ReportThread() {
         const double rate = static_cast<double>(now_hashes - last) / sec;
         last = now_hashes;
         t0 = now;
+        bool fast;
+        {
+            std::lock_guard<std::mutex> lock(g_ds_mu);
+            fast = static_cast<bool>(g_dataset);
+        }
         const uint64_t acc = g_client ? g_client->AcceptedShares() : 0;
         const uint64_t rej = g_client ? g_client->RejectedShares() : 0;
-        std::printf("Hashrate: %.0f H/s | shares: %llu accepted",
-                    rate, static_cast<unsigned long long>(acc));
+        std::printf("Hashrate: %.0f H/s (%s) | shares: %llu accepted",
+                    rate, fast ? "fast" : "light",
+                    static_cast<unsigned long long>(acc));
         if (rej > 0) std::printf(", %llu rejected", static_cast<unsigned long long>(rej));
         std::printf("\n");
         std::fflush(stdout);
@@ -200,13 +308,14 @@ void PrintBlockZeroHint() {
 
 void PrintUsage(const char* argv0) {
     std::fprintf(stderr,
-        "Usage: %s -o pool_url -u bz1ADDR.rig [-Threads N]\n"
+        "Usage: %s -o pool_url -u bz1ADDR.rig [-Threads N] [--light]\n"
         "\n"
         "End users: run BlockZero pool mining instead:\n"
         "  Windows:     mine-mainnet.ps1 -Pool\n"
         "  Linux/macOS: mine-pool.sh\n"
         "\n"
-        "  -Threads N   CPU threads (1-%d). Also: -t, --threads\n",
+        "  -Threads N   CPU threads (1-%d). Also: -t, --threads\n"
+        "  --light      RandomX light mode (256 MB instead of ~2.3 GB RAM)\n",
         argv0, kMaxThreads);
 }
 
@@ -226,6 +335,7 @@ int main(int argc, char* argv[]) {
     std::string password = "x";
     int threads = 0;
     bool help = false;
+    bool light = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -233,6 +343,7 @@ int main(int argc, char* argv[]) {
         else if ((arg == "-u" || arg == "--user") && i + 1 < argc) worker = argv[++i];
         else if ((arg == "-p" || arg == "--pass") && i + 1 < argc) password = argv[++i];
         else if (MatchesThreadsArg(arg) && i + 1 < argc) threads = std::atoi(argv[++i]);
+        else if (arg == "--light" || arg == "-Light") light = true;
         else if (arg == "-h" || arg == "--help") help = true;
     }
 
@@ -255,10 +366,12 @@ int main(int argc, char* argv[]) {
         worker = BuildWorker(cfg);
         if (url.empty()) url = cfg.pool_url;
         if (threads <= 0) threads = ResolveThreads(cfg);
+        if (cfg.mode == "light") light = true;
     } else {
         if (url.empty()) url = "wss://pool.bloz.org/stratum";
         if (threads <= 0) threads = ResolveThreads(cfg);
     }
+    g_fast_mode = !light;
 
     // Clamp instead of erroring out - users should never see a hard failure
     // for asking for too many threads.
@@ -273,6 +386,7 @@ int main(int argc, char* argv[]) {
                   << " logical cores - using " << cores << ".\n";
         threads = cores;
     }
+    g_threads = threads;
 
     if (worker.find("bz1") != 0 || worker.find('.') == std::string::npos) {
         std::fprintf(stderr, "Worker must be bz1ADDRESS.rigname (got: %s)\n", worker.c_str());
@@ -286,6 +400,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Pool:    " << url << "\n";
     std::cout << "Worker:  " << worker << "\n";
     std::cout << "Threads: " << threads << "\n";
+    std::cout << "Mode:    " << (g_fast_mode ? "fast (RandomX dataset)" : "light") << "\n";
     std::cout << "Config:  " << conf_path << "\n";
     std::cout << "Press Ctrl+C to stop.\n\n";
     std::cout.flush();
@@ -318,6 +433,10 @@ int main(int argc, char* argv[]) {
     {
         std::lock_guard<std::mutex> lock(g_job_mu);
         g_job.cache.reset();
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_ds_mu);
+        g_dataset.reset();
     }
 
     std::cout << "\nMiner stopped.\n";

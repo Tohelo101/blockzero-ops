@@ -6,7 +6,8 @@ struct MinerConfig {
     std::string pool_url = "wss://pool.bloz.org/stratum";
     std::string bz1_address;
     std::string worker_name = "pc";
-    int threads = 0; // 0 = auto-detect
+    int threads = 0;           // 0 = auto-detect
+    std::string mode = "fast"; // fast (2 GB dataset) or light (256 MB)
 };
 
 std::string GetExeDirectory();
