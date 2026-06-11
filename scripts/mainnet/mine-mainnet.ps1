@@ -180,7 +180,7 @@ function Find-Exe([string]$Name) {
     if (Test-Path $defaultBin) { return $defaultBin }
     $cmd = Get-Command $Name -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
-    throw "Cannot find $Name. Run install-windows.ps1 or pass -BinDir."
+    throw "Cannot find $Name. Run .\install-windows.ps1 (in this folder) or pass -BinDir."
 }
 
 function Try-Invoke-Cli([string[]]$CliArgs) {

@@ -6,9 +6,8 @@ Mine BLOZ on **pool.bloz.org** — everything through BlockZero.
 
 ```powershell
 git clone https://github.com/Rexemre/blockzero-ops.git
-cd blockzero-ops\scripts\testnet
+cd blockzero-ops\scripts\mainnet
 .\install-windows.ps1
-cd ..\mainnet
 .\mine-mainnet.ps1 -Pool
 ```
 
