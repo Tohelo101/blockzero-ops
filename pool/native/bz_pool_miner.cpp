@@ -95,7 +95,7 @@ void BuildDatasetAsync(std::shared_ptr<RxCache> cache, std::string key_hex, rand
         const auto t0 = std::chrono::steady_clock::now();
 
         const unsigned long total = randomx_dataset_item_count();
-        const int n = std::max(1, g_threads);
+        const int n = g_threads < 1 ? 1 : g_threads; // no std::max: windows.h defines a max macro
         std::vector<std::thread> workers;
         workers.reserve(n);
         const unsigned long chunk = total / n;
