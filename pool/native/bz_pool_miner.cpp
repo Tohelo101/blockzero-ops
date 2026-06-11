@@ -1,5 +1,5 @@
 // bz-pool-miner — native BLOZ pool miner (RandomX + Stratum/WSS)
-// Started by blockzero-ops: mine-mainnet.ps1 -Pool
+// Started by blockzero-ops: mine-mainnet.ps1 -Pool (Windows) / mine-pool.sh (Linux, macOS)
 
 #include "miner_config.hpp"
 #include "pow_util.hpp"
@@ -20,6 +20,8 @@
 #include <vector>
 
 namespace {
+
+constexpr int kMaxThreads = 64;
 
 struct RxCache {
     randomx_cache* ptr{nullptr};
@@ -44,11 +46,13 @@ struct ActiveJob {
     uint8_t pool_target_be[32]{};
     randomx_flags flags{};
     std::shared_ptr<RxCache> cache;
+    std::string rx_key_hex;
 };
 
 std::mutex g_job_mu;
 ActiveJob g_job;
 std::atomic<bool> g_stop{false};
+std::atomic<uint64_t> g_hashes{0};
 pool::StratumClient* g_client{nullptr};
 
 bool ApplyJob(const pool::MiningJob& mj) {
@@ -59,15 +63,26 @@ bool ApplyJob(const pool::MiningJob& mj) {
         return false;
     }
 
-    const randomx_flags flags = MiningFlags();
-    randomx_cache* raw_cache = randomx_alloc_cache(flags);
-    if (!raw_cache) {
-        std::cerr << "RandomX cache allocation failed (low memory?)\n";
-        return false;
+    // Reuse the existing RandomX cache when the key is unchanged. Cache init
+    // takes seconds; jobs change every block but the key only every epoch.
+    std::shared_ptr<RxCache> cache_holder;
+    {
+        std::lock_guard<std::mutex> lock(g_job_mu);
+        if (g_job.cache && g_job.rx_key_hex == mj.rx_key_hex) {
+            cache_holder = g_job.cache;
+        }
     }
-    randomx_init_cache(raw_cache, key.data(), key.size());
 
-    auto cache_holder = std::make_shared<RxCache>(raw_cache);
+    const randomx_flags flags = MiningFlags();
+    if (!cache_holder) {
+        randomx_cache* raw_cache = randomx_alloc_cache(flags);
+        if (!raw_cache) {
+            std::cerr << "RandomX cache allocation failed (low memory?)\n";
+            return false;
+        }
+        randomx_init_cache(raw_cache, key.data(), key.size());
+        cache_holder = std::make_shared<RxCache>(raw_cache);
+    }
 
     {
         std::lock_guard<std::mutex> lock(g_job_mu);
@@ -75,10 +90,11 @@ bool ApplyJob(const pool::MiningJob& mj) {
         g_job.header_prefix = std::move(prefix);
         g_job.flags = flags;
         g_job.cache = cache_holder;
+        g_job.rx_key_hex = mj.rx_key_hex;
         pool::HexToTargetBe(mj.pool_target_hex, g_job.pool_target_be);
     }
 
-    std::cout << "New job: " << mj.job_id << " - mining started.\n";
+    std::cout << "New job: " << mj.job_id << " - mining.\n";
     std::cout.flush();
     return true;
 }
@@ -117,8 +133,6 @@ void GrindThread(int thread_id, int thread_count) {
         std::memcpy(header.data(), header_prefix.data(), 76);
         uint64_t nonce = static_cast<uint32_t>(thread_id);
         const uint64_t step = static_cast<uint64_t>(thread_count);
-        uint64_t hashes = 0;
-        auto t0 = std::chrono::steady_clock::now();
 
         while (!g_stop.load()) {
             {
@@ -130,30 +144,43 @@ void GrindThread(int thread_id, int thread_count) {
                 const uint32_t n = static_cast<uint32_t>(nonce);
                 std::memcpy(header.data() + 76, &n, 4);
                 randomx_calculate_hash(vm, header.data(), header.size(), hash);
-                ++hashes;
 
                 if (pool::HashMeetsTarget(hash, pool_target_be)) {
-                    std::cout << "Share found (nonce=" << n << ")\n";
+                    std::cout << "Share found (nonce=" << n << ") - submitting...\n";
                     std::cout.flush();
                     if (g_client) g_client->SubmitShare(job_id, n);
                 }
                 nonce += step;
             }
-
-            if (hashes >= 20000) {
-                const double sec = std::chrono::duration<double>(
-                    std::chrono::steady_clock::now() - t0).count();
-                if (sec > 0) {
-                    std::cout << "thread " << thread_id << " ~" << static_cast<int>(hashes / sec)
-                              << " H/s\n";
-                    std::cout.flush();
-                }
-                hashes = 0;
-                t0 = std::chrono::steady_clock::now();
-            }
+            g_hashes.fetch_add(500, std::memory_order_relaxed);
         }
 
         randomx_destroy_vm(vm);
+    }
+}
+
+void ReportThread() {
+    auto t0 = std::chrono::steady_clock::now();
+    uint64_t last = 0;
+    while (!g_stop.load()) {
+        for (int i = 0; i < 300 && !g_stop.load(); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        if (g_stop.load()) break;
+        const uint64_t now_hashes = g_hashes.load(std::memory_order_relaxed);
+        const auto now = std::chrono::steady_clock::now();
+        const double sec = std::chrono::duration<double>(now - t0).count();
+        if (sec <= 0) continue;
+        const double rate = static_cast<double>(now_hashes - last) / sec;
+        last = now_hashes;
+        t0 = now;
+        const uint64_t acc = g_client ? g_client->AcceptedShares() : 0;
+        const uint64_t rej = g_client ? g_client->RejectedShares() : 0;
+        std::printf("Hashrate: %.0f H/s | shares: %llu accepted",
+                    rate, static_cast<unsigned long long>(acc));
+        if (rej > 0) std::printf(", %llu rejected", static_cast<unsigned long long>(rej));
+        std::printf("\n");
+        std::fflush(stdout);
     }
 }
 
@@ -163,9 +190,12 @@ bool MatchesThreadsArg(const std::string& arg) {
 
 void PrintBlockZeroHint() {
     std::cerr << "\nThis miner is started by BlockZero (blockzero-ops).\n";
+    std::cerr << "Windows:\n";
     std::cerr << "  cd blockzero-ops\\scripts\\mainnet\n";
     std::cerr << "  .\\mine-mainnet.ps1 -Pool\n";
-    std::cerr << "  .\\mine-mainnet.ps1 -Pool -Threads 4\n\n";
+    std::cerr << "Linux/macOS:\n";
+    std::cerr << "  cd blockzero-ops/scripts/mainnet\n";
+    std::cerr << "  ./mine-pool.sh\n\n";
 }
 
 void PrintUsage(const char* argv0) {
@@ -173,10 +203,11 @@ void PrintUsage(const char* argv0) {
         "Usage: %s -o pool_url -u bz1ADDR.rig [-Threads N]\n"
         "\n"
         "End users: run BlockZero pool mining instead:\n"
-        "  mine-mainnet.ps1 -Pool\n"
+        "  Windows:     mine-mainnet.ps1 -Pool\n"
+        "  Linux/macOS: mine-pool.sh\n"
         "\n"
-        "  -Threads N   CPU threads (1-16). Also: -t, --threads\n",
-        argv0);
+        "  -Threads N   CPU threads (1-%d). Also: -t, --threads\n",
+        argv0, kMaxThreads);
 }
 
 } // namespace
@@ -229,11 +260,18 @@ int main(int argc, char* argv[]) {
         if (threads <= 0) threads = ResolveThreads(cfg);
     }
 
-    if (threads < 1 || threads > 16) {
-        std::cerr << "Thread count must be between 1 and 16 (got " << threads << ").\n";
-        ix::uninitNetSystem();
-        PauseBeforeExit(1);
-        return 1;
+    // Clamp instead of erroring out - users should never see a hard failure
+    // for asking for too many threads.
+    if (threads < 1) threads = 1;
+    if (threads > kMaxThreads) {
+        std::cout << "Requested " << threads << " threads - capping at " << kMaxThreads << ".\n";
+        threads = kMaxThreads;
+    }
+    const int cores = static_cast<int>(std::thread::hardware_concurrency());
+    if (cores > 0 && threads > cores) {
+        std::cout << "Note: " << threads << " threads on " << cores
+                  << " logical cores - using " << cores << ".\n";
+        threads = cores;
     }
 
     if (worker.find("bz1") != 0 || worker.find('.') == std::string::npos) {
@@ -259,23 +297,16 @@ int main(int argc, char* argv[]) {
     std::signal(SIGINT, [](int) { g_stop.store(true); });
     std::signal(SIGTERM, [](int) { g_stop.store(true); });
 
-    if (!client.Start()) {
-        ix::uninitNetSystem();
-        PauseBeforeExit(1);
-        return 1;
-    }
+    client.Start(); // keeps retrying in the background even if first connect fails
 
     std::vector<std::thread> workers;
-    workers.reserve(threads);
+    workers.reserve(threads + 1);
     for (int t = 0; t < threads; ++t) {
         workers.emplace_back(GrindThread, t, threads);
     }
+    workers.emplace_back(ReportThread);
 
     while (!g_stop.load()) {
-        if (client.IsDisconnected()) {
-            std::cerr << "Pool connection lost. Stopping miner.\n";
-            g_stop.store(true);
-        }
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
 

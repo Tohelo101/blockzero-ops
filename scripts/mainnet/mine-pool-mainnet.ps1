@@ -49,7 +49,10 @@ function Get-ThreadCount {
     if ($Threads -gt 0) { return $Threads }
     $fromConf = Read-ConfValue "THREADS"
     if ($fromConf -match "^\d+$" -and [int]$fromConf -gt 0) { return [int]$fromConf }
-    return [Math]::Max(1, [Math]::Min(16, [Environment]::ProcessorCount))
+    # Auto: leave one core for the system on bigger machines.
+    $cores = [Environment]::ProcessorCount
+    if ($cores -gt 4) { return $cores - 1 }
+    return [Math]::Max(1, $cores)
 }
 
 function Ensure-Installed {
@@ -85,13 +88,16 @@ function Show-PoolStatus {
     }
     Write-Host "Pool:     $($st.pool)"
     Write-Host "Height:   $($st.height)"
-    Write-Host "Peers:    $($st.peers)"
     Write-Host "Stratum:  $($st.stratum)"
     Write-Host "Scheme:   $($st.scheme)"
     Write-Host "Fee:      $($st.fee_percent)%"
     if ($st.pplns) {
-        Write-Host "Miners:   $($st.pplns.miners)"
-        Write-Host "Shares:   $($st.pplns.total_shares)"
+        Write-Host "Miners:   $($st.pplns.workers)"
+        Write-Host "Shares:   $($st.pplns.shares)"
+    }
+    if ($st.hashrate -and $st.hashrate.pool -gt 0) {
+        $khs = [Math]::Round($st.hashrate.pool / 1000, 2)
+        Write-Host "Pool H/s: $khs kH/s ($($st.hashrate.active_workers) active)"
     }
     Write-Host ""
     Write-Host "Dashboard: https://pool.bloz.org"
@@ -116,8 +122,9 @@ if ($Install) {
     exit 0
 }
 
-if (-not $Address) { $Address = Read-ConfValue "BZ1_ADDRESS" }
+# BlockZero wallet first - a stale miner.conf must never override the wallet.
 if (-not $Address) { $Address = Get-BlockZeroMiningAddress }
+if (-not $Address) { $Address = Read-ConfValue "BZ1_ADDRESS" }
 
 if (-not $Address) {
     Write-Host ""

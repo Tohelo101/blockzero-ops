@@ -32,7 +32,9 @@ function Get-MinerRelease {
 function Write-MinerConf {
     param([string]$Addr, [string]$Worker, [int]$Threads)
     $cores = [Environment]::ProcessorCount
-    if ($Threads -le 0) { $Threads = [Math]::Max(1, [Math]::Min(16, $cores)) }
+    if ($Threads -le 0) {
+        $Threads = if ($cores -gt 4) { $cores - 1 } else { [Math]::Max(1, $cores) }
+    }
     @"
 # BLOZ pool miner - managed by blockzero-ops
 POOL_URL=wss://pool.bloz.org/stratum

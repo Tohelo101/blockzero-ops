@@ -16,6 +16,18 @@ std::string JsonEscape(const std::string& s) {
     return s;
 }
 
+// Minimal "id":N extractor for stratum responses.
+int ExtractId(const std::string& json) {
+    auto pos = json.find("\"id\"");
+    if (pos == std::string::npos) return -1;
+    pos = json.find(':', pos);
+    if (pos == std::string::npos) return -1;
+    ++pos;
+    while (pos < json.size() && json[pos] == ' ') ++pos;
+    if (pos >= json.size() || !isdigit(static_cast<unsigned char>(json[pos]))) return -1;
+    return std::atoi(json.c_str() + pos);
+}
+
 } // namespace
 
 StratumClient::StratumClient(std::string url, std::string worker, std::string password)
@@ -27,11 +39,14 @@ void StratumClient::SetJobCallback(JobCallback cb) { on_job_ = std::move(cb); }
 
 bool StratumClient::IsConnected() const { return connected_.load(); }
 
-bool StratumClient::IsDisconnected() const { return disconnected_.load(); }
+void StratumClient::SendHello() {
+    SendLine("{\"id\":" + std::to_string(req_id_++) + ",\"method\":\"mining.subscribe\",\"params\":[]}");
+    SendLine("{\"id\":" + std::to_string(req_id_++) + ",\"method\":\"mining.authorize\",\"params\":[\"" +
+             JsonEscape(worker_) + "\",\"" + JsonEscape(password_) + "\"]}");
+}
 
 bool StratumClient::Start() {
     connected_.store(false);
-    disconnected_.store(false);
 
     auto* ws = new ix::WebSocket();
     ws_ = ws;
@@ -40,43 +55,42 @@ bool StratumClient::Start() {
     tls.caFile = "SYSTEM";
     ws->setTLSOptions(tls);
     ws->enableAutomaticReconnection();
+    ws->setMinWaitBetweenReconnectionRetries(2000);
+    ws->setMaxWaitBetweenReconnectionRetries(30000);
 
     ws->setOnMessageCallback([this](const ix::WebSocketMessagePtr& msg) {
         if (msg->type == ix::WebSocketMessageType::Open) {
-            connected_.store(true);
-            disconnected_.store(false);
-            std::cout << "Connected to pool.\n";
+            const bool was_connected = connected_.exchange(true);
+            std::cout << (was_connected ? "Reconnected to pool.\n" : "Connected to pool.\n");
             std::cout.flush();
+            // Re-subscribe + authorize on every (re)connect so mining resumes
+            // automatically after network drops or pool restarts.
+            SendHello();
         } else if (msg->type == ix::WebSocketMessageType::Message) {
             OnMessage(msg->str);
         } else if (msg->type == ix::WebSocketMessageType::Error) {
-            std::cerr << "Stratum error: " << msg->errorInfo.reason << std::endl;
-            disconnected_.store(true);
-        } else if (msg->type == ix::WebSocketMessageType::Close) {
-            std::cerr << "Stratum connection closed." << std::endl;
+            std::cerr << "Pool connection error: " << msg->errorInfo.reason
+                      << " - retrying...\n";
             connected_.store(false);
-            disconnected_.store(true);
+        } else if (msg->type == ix::WebSocketMessageType::Close) {
+            std::cerr << "Pool connection lost - reconnecting automatically...\n";
+            connected_.store(false);
         }
     });
 
     ws->start();
-    for (int i = 0; i < 150 && !connected_.load() && !disconnected_.load(); ++i) {
+    for (int i = 0; i < 300 && !connected_.load(); ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     if (!connected_.load()) {
-        std::cerr << "Failed to connect to pool: " << url_ << std::endl;
-        std::cerr << "Check internet connection and firewall, then try again." << std::endl;
-        ws->stop();
-        delete ws;
-        ws_ = nullptr;
-        return false;
+        std::cerr << "Could not connect to pool within 30s: " << url_ << "\n";
+        std::cerr << "Check internet connection and firewall. The miner keeps retrying.\n";
+        // Keep the websocket alive - automatic reconnection continues in the
+        // background and mining starts as soon as the pool is reachable.
+    } else {
+        std::cout << "Subscribed and authorized. Waiting for work...\n";
+        std::cout.flush();
     }
-
-    SendLine("{\"id\":" + std::to_string(req_id_++) + ",\"method\":\"mining.subscribe\",\"params\":[]}");
-    SendLine("{\"id\":" + std::to_string(req_id_++) + ",\"method\":\"mining.authorize\",\"params\":[\"" +
-             JsonEscape(worker_) + "\",\"" + JsonEscape(password_) + "\"]}");
-    std::cout << "Subscribed and authorized. Waiting for work...\n";
-    std::cout.flush();
     return true;
 }
 
@@ -96,10 +110,18 @@ void StratumClient::SendLine(const std::string& line) {
 }
 
 bool StratumClient::SubmitShare(const std::string& job_id, uint32_t nonce) {
+    if (!connected_.load()) return false;
     char nonce_hex[16];
     std::snprintf(nonce_hex, sizeof(nonce_hex), "%08x", nonce);
+    int id;
+    {
+        std::lock_guard<std::mutex> lock(submit_mu_);
+        id = req_id_++;
+        submit_ids_.insert(id);
+        if (submit_ids_.size() > 256) submit_ids_.erase(submit_ids_.begin());
+    }
     std::ostringstream oss;
-    oss << "{\"id\":" << req_id_++ << ",\"method\":\"mining.submit\",\"params\":[\"" << worker_ << "\",\""
+    oss << "{\"id\":" << id << ",\"method\":\"mining.submit\",\"params\":[\"" << worker_ << "\",\""
         << job_id << "\",\"" << nonce_hex << "\"]}";
     SendLine(oss.str());
     return true;
@@ -143,16 +165,46 @@ std::string StratumClient::ExtractNotifyParam(const std::string& json, int index
 }
 
 void StratumClient::OnMessage(const std::string& line) {
-    if (line.find("mining.notify") == std::string::npos) return;
-    MiningJob job;
-    job.job_id = ExtractNotifyParam(line, 0);
-    job.header_prefix_hex = ExtractNotifyParam(line, 1);
-    job.rx_key_hex = ExtractNotifyParam(line, 2);
-    job.pool_target_hex = ExtractNotifyParam(line, 4);
-    const auto clean = ExtractNotifyParam(line, 7);
-    job.clean = (clean == "true");
-    if (job.job_id.empty() || job.header_prefix_hex.empty() || job.rx_key_hex.empty()) return;
-    if (on_job_) on_job_(job);
+    if (line.find("mining.notify") != std::string::npos) {
+        MiningJob job;
+        job.job_id = ExtractNotifyParam(line, 0);
+        job.header_prefix_hex = ExtractNotifyParam(line, 1);
+        job.rx_key_hex = ExtractNotifyParam(line, 2);
+        job.pool_target_hex = ExtractNotifyParam(line, 4);
+        const auto clean = ExtractNotifyParam(line, 7);
+        job.clean = (clean == "true");
+        if (job.job_id.empty() || job.header_prefix_hex.empty() || job.rx_key_hex.empty()) return;
+        if (on_job_) on_job_(job);
+        return;
+    }
+
+    // Track share accept/reject responses for submitted ids.
+    const int id = ExtractId(line);
+    if (id < 0) return;
+    bool is_submit;
+    {
+        std::lock_guard<std::mutex> lock(submit_mu_);
+        is_submit = submit_ids_.erase(id) > 0;
+    }
+    if (!is_submit) return;
+
+    if (line.find("\"result\":true") != std::string::npos) {
+        const auto n = accepted_.fetch_add(1) + 1;
+        std::cout << "Share accepted (" << n << " total)\n";
+        std::cout.flush();
+    } else {
+        rejected_.fetch_add(1);
+        std::string reason = "rejected";
+        auto err = line.find("\"error\":[");
+        if (err != std::string::npos) {
+            auto q1 = line.find('"', err + 9);
+            if (q1 != std::string::npos) {
+                auto q2 = line.find('"', q1 + 1);
+                if (q2 != std::string::npos) reason = line.substr(q1 + 1, q2 - q1 - 1);
+            }
+        }
+        std::cerr << "Share rejected: " << reason << "\n";
+    }
 }
 
 } // namespace pool

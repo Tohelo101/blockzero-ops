@@ -3,6 +3,7 @@
 #include <atomic>
 #include <functional>
 #include <mutex>
+#include <set>
 #include <string>
 
 namespace pool {
@@ -27,10 +28,13 @@ public:
     void Stop();
     bool SubmitShare(const std::string& job_id, uint32_t nonce);
     bool IsConnected() const;
-    bool IsDisconnected() const;
+
+    uint64_t AcceptedShares() const { return accepted_.load(); }
+    uint64_t RejectedShares() const { return rejected_.load(); }
 
 private:
     void OnMessage(const std::string& line);
+    void SendHello();
     void SendLine(const std::string& line);
     static std::string ExtractNotifyParam(const std::string& json, int index);
 
@@ -39,10 +43,13 @@ private:
     std::string password_;
     JobCallback on_job_;
     std::mutex send_mu_;
+    std::mutex submit_mu_;
+    std::set<int> submit_ids_;
     int req_id_{1};
     void* ws_{nullptr}; // ix::WebSocket*
     std::atomic<bool> connected_{false};
-    std::atomic<bool> disconnected_{false};
+    std::atomic<uint64_t> accepted_{0};
+    std::atomic<uint64_t> rejected_{0};
 };
 
 } // namespace pool
