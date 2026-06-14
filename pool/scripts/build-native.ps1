@@ -18,11 +18,19 @@ if (-not $cmake) { throw "cmake not found. Install CMake and add to PATH." }
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 Push-Location $BuildDir
 try {
-    cmake -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=$BuildType "$Root\native"
+    # Use Ninja (the MSVC env is already active via msvc-dev-cmd) instead of a
+    # pinned "Visual Studio 17 2022" generator — the runner image's VS version
+    # changes (now VS 18), and a hardcoded VS generator breaks on every bump.
+    cmake -G Ninja -DCMAKE_BUILD_TYPE=$BuildType "$Root\native"
     cmake --build . --config $BuildType --target bz-pool-miner -j
-    $exe = Join-Path $BuildDir "$BuildType\bz-pool-miner.exe"
-    if (-not (Test-Path $exe)) { $exe = Join-Path $BuildDir "Release\bz-pool-miner.exe" }
-    if (-not (Test-Path $exe)) { throw "Build failed: bz-pool-miner.exe not found" }
+    # Ninja (single-config) writes directly into $BuildDir; VS generators use a
+    # per-config subdir. Accept either layout.
+    $exe = @(
+        (Join-Path $BuildDir "bz-pool-miner.exe"),
+        (Join-Path $BuildDir "$BuildType\bz-pool-miner.exe"),
+        (Join-Path $BuildDir "Release\bz-pool-miner.exe")
+    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $exe) { throw "Build failed: bz-pool-miner.exe not found" }
     $out = Join-Path $Root "bin\bz-pool-miner.exe"
     New-Item -ItemType Directory -Force -Path (Split-Path $out) | Out-Null
     Copy-Item -Force $exe $out
