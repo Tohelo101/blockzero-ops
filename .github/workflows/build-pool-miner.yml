@@ -54,6 +54,27 @@ jobs:
           name: bz-pool-miner-linux
           path: bz-pool-miner-linux-x64.tar.gz
 
+  linux-arm64:
+    # ubuntu-22.04-arm: GitHub-hosted ARM64 runner (free for public repos), glibc 2.35.
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ libssl-dev
+      - name: Build bz-pool-miner
+        run: |
+          cmake -S pool/native -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_EXE_LINKER_FLAGS=-static-libstdc++
+          cmake --build build --target bz-pool-miner -j"$(nproc)"
+          mkdir -p dist
+          cp build/bz-pool-miner dist/
+          tar -czf bz-pool-miner-linux-arm64.tar.gz -C dist bz-pool-miner
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bz-pool-miner-linux-arm64
+          path: bz-pool-miner-linux-arm64.tar.gz
+
   macos:
     runs-on: macos-latest
     timeout-minutes: 45
@@ -75,7 +96,7 @@ jobs:
           path: bz-pool-miner-macos-arm64.tar.gz
 
   release:
-    needs: [windows, linux, macos]
+    needs: [windows, linux, linux-arm64, macos]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -92,6 +113,7 @@ jobs:
             artifacts/bz-pool-miner-windows/libssl-3-x64.dll
             artifacts/bz-pool-miner-windows/libcrypto-3-x64.dll
             artifacts/bz-pool-miner-linux/bz-pool-miner-linux-x64.tar.gz
+            artifacts/bz-pool-miner-linux-arm64/bz-pool-miner-linux-arm64.tar.gz
             artifacts/bz-pool-miner-macos/bz-pool-miner-macos-arm64.tar.gz
           generate_release_notes: false
           body: |
@@ -105,6 +127,7 @@ jobs:
             |----------|------|-----|
             | Windows | `bz-pool-miner.exe` (+ DLLs) | `mine-mainnet.ps1 -Pool` |
             | Linux x64 | `bz-pool-miner-linux-x64.tar.gz` | `mine-pool.sh` |
+            | Linux arm64 | `bz-pool-miner-linux-arm64.tar.gz` | `mine-pool.sh` |
             | macOS (Apple Silicon) | `bz-pool-miner-macos-arm64.tar.gz` | `mine-pool.sh` |
 
             Recommended: use blockzero-ops scripts instead of running the binary directly.

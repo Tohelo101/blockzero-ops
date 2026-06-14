@@ -28,7 +28,7 @@ chmod +x mine-pool.sh
 **Important:** pass **only your `bz1` payout address** — not `bz1…rig1`. The script builds the Stratum
 worker as `bz1YOURADDRESS.rigname` automatically (rig name = your hostname, or set `WORKER=rig2`).
 
-The script downloads the prebuilt miner (Linux x64 / macOS arm64) from
+The script downloads the prebuilt miner (Linux x64, Linux arm64, macOS arm64) from
 [blockzero-ops releases](https://github.com/Rexemre/blockzero-ops/releases) and auto-restarts on crashes.
 
 Options (env vars): `THREADS=8 ./mine-pool.sh` · `WORKER=rig2 ./mine-pool.sh bz1…` · `FORCE=1` re-downloads the miner.

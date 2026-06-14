@@ -61,8 +61,11 @@ OS="$(uname -s)"
 ARCH="$(uname -m)"
 case "$OS" in
     Linux)
-        [ "$ARCH" = "x86_64" ] || die "Prebuilt Linux binary is x86_64 only (got $ARCH). Build from source: pool/native in $REPO"
-        ASSET="bz-pool-miner-linux-x64.tar.gz"
+        case "$ARCH" in
+            x86_64|amd64) ASSET="bz-pool-miner-linux-x64.tar.gz" ;;
+            aarch64|arm64) ASSET="bz-pool-miner-linux-arm64.tar.gz" ;;
+            *) die "No prebuilt Linux binary for $ARCH. Build from source: pool/native in $REPO" ;;
+        esac
         ;;
     Darwin)
         [ "$ARCH" = "arm64" ] || die "Prebuilt macOS binary is Apple Silicon only (got $ARCH). Build from source: pool/native in $REPO"
