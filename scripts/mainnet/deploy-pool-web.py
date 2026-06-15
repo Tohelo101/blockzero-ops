@@ -1,57 +1,55 @@
 #!/usr/bin/env python3
-"""Deploy pool web dashboard (and optionally engine) to the pool VPS."""
+"""Upload blockzero-pool/web to pool node VPS."""
 import os
-import sys
-
 import paramiko
 
-HOST = "217.154.169.211"
-PW = os.environ.get("POOL_VPS_PASSWORD", "")
-LOCAL = os.path.join(os.path.dirname(__file__), "..", "..", "..", "blockzero-pool")
-
-FILES = [
-    ("web/index.html", "/opt/blockzero-pool/web/index.html"),
-    ("web/assets/app.css", "/opt/blockzero-pool/web/assets/app.css"),
-    ("web/assets/app.js", "/opt/blockzero-pool/web/assets/app.js"),
-    ("engine/status_server.py", "/opt/blockzero-pool/engine/status_server.py"),
-    ("engine/pplns.py", "/opt/blockzero-pool/engine/pplns.py"),
-    ("engine/stratum_server.py", "/opt/blockzero-pool/engine/stratum_server.py"),
-]
+ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "blockzero-pool", "web")
+)
+REMOTE = "/opt/blockzero-pool/web"
+HOST = os.environ.get("POOL_VPS_HOST", "217.154.169.211")
+FALLBACK_HOST = os.environ.get("POOL_WEB_FALLBACK_HOST", "217.160.64.206")
 
 
-def main():
-    if not PW:
-        sys.exit("Set POOL_VPS_PASSWORD")
+def main() -> None:
+    pw = os.environ.get("POOL_VPS_PASSWORD") or ""
+    if not pw:
+        raise SystemExit("Set POOL_VPS_PASSWORD")
+    print(f"Deploying to {HOST}...")
+    try:
+        upload_with_pw(HOST, pw)
+        print("Done.")
+        return
+    except Exception as exc:
+        print(f"{HOST}: {exc}")
+    fb_pw = os.environ.get("MINER_VPS_PASSWORD", "")
+    if FALLBACK_HOST and FALLBACK_HOST != HOST and fb_pw:
+        print(f"Fallback {FALLBACK_HOST} (not live DNS unless you switch)...")
+        try:
+            upload_with_pw(FALLBACK_HOST, fb_pw)
+            print("Fallback upload ok — pool.bloz.org still serves from POOL VPS until you deploy there.")
+            return
+        except Exception as exc2:
+            print(f"{FALLBACK_HOST}: {exc2}")
+    raise SystemExit("Deploy failed")
 
+
+def upload_with_pw(host: str, pw: str) -> None:
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    c.connect(HOST, username="root", password=PW, timeout=30)
+    c.connect(host, username="root", password=pw, timeout=30)
     s = c.open_sftp()
-
-    c.exec_command("mkdir -p /opt/blockzero-pool/web/assets")[1].read()
-
-    for rel, remote in FILES:
-        local = os.path.normpath(os.path.join(LOCAL, rel))
-        if not os.path.isfile(local):
-            print(f"skip (missing): {rel}")
-            continue
-        print(f"upload {rel} -> {remote}")
+    for name in ("index.html",):
+        local = os.path.join(ROOT, name.replace("/", os.sep))
+        remote = f"{REMOTE}/{name}"
         s.put(local, remote)
-
+        print(f"  {local} -> {host}:{remote}")
     s.close()
-    print("restart services...")
-    _, o, e = c.exec_command(
-        "systemctl restart blockzero-pool-api blockzero-pool-stratum; sleep 2; "
-        "systemctl is-active blockzero-pool-api blockzero-pool-stratum; "
-        "curl -s https://pool.bloz.org/api/status | head -c 400",
-        timeout=60,
+    _, o, _ = c.exec_command(
+        f"grep -c 'details open' {REMOTE}/index.html || true", timeout=15
     )
-    print(o.read().decode())
-    err = e.read().decode().strip()
-    if err:
-        print("STDERR:", err)
+    print(f"  details open count: {o.read().decode().strip()}")
     c.close()
-    print("DONE")
 
 
 if __name__ == "__main__":

@@ -54,8 +54,6 @@ NETWORKS = {
 # ---------------------------------------------------------------------------
 THEME_CSS = """\
 /* BLOCK ZERO explorer theme — design tokens shared with bloz.org */
-@import url("https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600&display=swap");
-
 :root {
 \t--bz-void: #05070A;
 \t--bz-steel: #11161D;
@@ -80,8 +78,8 @@ footer.bg-header-footer, footer { border-top: 1px solid var(--bz-line); }
 
 h1, h2, h3, .h1, .h2, .h3 { font-family: "Orbitron", "Rajdhani", sans-serif; letter-spacing: 0.04em; }
 
-a { color: var(--bz-blue); }
-a:hover { color: var(--bz-cyan); }
+.card a, .modal a, .dropdown-menu a, footer a, table a, p a, li a { color: var(--bz-blue); }
+.card a:hover, .modal a:hover, .dropdown-menu a:hover, footer a:hover, table a:hover, p a:hover, li a:hover { color: var(--bz-cyan); }
 
 .btn-primary { background-color: rgba(63, 169, 255, 0.10) !important; border-color: var(--bz-blue) !important; color: var(--bz-white) !important; border-radius: 0 !important; }
 .btn-primary:hover { background-color: rgba(63, 169, 255, 0.22) !important; box-shadow: 0 0 18px rgba(63, 169, 255, 0.3); }
@@ -91,8 +89,10 @@ a:hover { color: var(--bz-cyan); }
 .dropdown-item:hover, .dropdown-item:focus { background-color: rgba(111, 231, 255, 0.08) !important; color: var(--bz-cyan) !important; }
 .badge.bg-primary { background-color: rgba(63, 169, 255, 0.18) !important; border: 1px solid var(--bz-blue); color: var(--bz-cyan) !important; }
 
-/* Hide duplicate explorer navbar — suite header from bloz.org is canonical */
-nav.navbar.bg-header-footer { display: none !important; }
+/* Suite nav is canonical branding — keep search + tool menus, hide duplicate logo/title */
+nav.navbar.bg-header-footer .navbar-brand { display: none !important; }
+nav.navbar.bg-header-footer { padding-top: 0.35rem; padding-bottom: 0.35rem; }
+nav.navbar.bg-header-footer .navbar-collapse { justify-content: flex-end; }
 """
 
 
@@ -101,8 +101,8 @@ def suite_nav_pug(explorer_url: str) -> str:
     return (
         '\t\tnav.bz-suite(aria-label="Block Zero sites")\n'
         '\t\t\ta.bz-suite-brand(href="https://bloz.org")\n'
-        '\t\t\t\timg(src="https://bloz.org/assets/bloz-mark.png", alt="", width="83", height="83")\n'
-        "\t\t\t\tspan BLOCK ZERO\n"
+        '\t\t\t\timg(src="https://bloz.org/assets/bloz-logo-nav.png", alt="Block Zero", height="52")\n'
+        '\t\t\t\tspan Block Zero\n'
         "\t\t\t.bz-suite-links\n"
         '\t\t\t\ta(href="https://bloz.org") Home\n'
         '\t\t\t\ta(href="https://pool.bloz.org") Pool\n'
@@ -195,25 +195,80 @@ def currency_patches(base: str, cfg: dict) -> dict[str, list[tuple[str, str, int
 def theme_patches(base: str, cfg: dict) -> dict[str, list[tuple[str, str, int]]]:
     """Inject the Block Zero theme css + shared suite nav into layout.pug."""
     css_link = '\t\tlink(rel="stylesheet", href="./style/bloz-theme.css")'
-    header_css = '\t\tlink(rel="stylesheet", href="https://bloz.org/assets/bloz-header.css")'
+    header_css = '\t\tlink(rel="stylesheet", href="https://bloz.org/assets/bloz-header.css?v=3")'
+    favicon_links = (
+        '\t\tlink(rel="icon", href="https://bloz.org/favicon.ico?v=10", sizes="any")\n'
+        '\t\tlink(rel="icon", type="image/png", sizes="32x32", href="https://bloz.org/assets/favicon-32.png?v=10")\n'
+        '\t\tlink(rel="icon", type="image/png", href="https://bloz.org/assets/favicon.png?v=10")\n'
+        '\t\tlink(rel="apple-touch-icon", href="https://bloz.org/assets/apple-touch-icon.png?v=10")'
+    )
+    btc_favicon_16 = '\t\tlink(rel="icon", type="image/png", sizes="16x16", href=assetUrl(`./img/network-${network}/favicon-16x16.png`))'
+    btc_favicon_shortcut = '\t\tlink(rel="shortcut icon", href=assetUrl(`./img/network-${network}/favicon.ico`))'
     header_js = '\t\tscript(src="https://bloz.org/assets/bloz-header.js" defer)'
+    font_links = (
+        '\t\tlink(rel="preconnect", href="https://fonts.googleapis.com")\n'
+        '\t\tlink(rel="preconnect", href="https://fonts.gstatic.com", crossorigin)\n'
+        '\t\tlink(rel="stylesheet", href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap")'
+    )
     nav = suite_nav_pug(cfg["explorer_url"])
     return {
         f"{base}/views/layout.pug": [
-            ("+themeCss", f"+themeCss\n{css_link}\n{header_css}", 1),
             (
-                'href="./style/bloz-theme.css")',
-                'href="./style/bloz-theme.css")\n\t\tlink(rel="stylesheet", href="https://bloz.org/assets/bloz-header.css")',
+                'meta(name="viewport", content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0, shrink-to-fit=no")',
+                'meta(name="viewport", content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0, shrink-to-fit=no")\n\n' + font_links,
+                1,
+            ),
+            (
+                'link(rel="stylesheet", href="https://bloz.org/assets/bloz-header.css")',
+                'link(rel="stylesheet", href="https://bloz.org/assets/bloz-header.css?v=3")',
                 0,
             ),
             (
+                'link(rel="stylesheet", href="https://bloz.org/assets/bloz-header.css?v=2")',
+                'link(rel="stylesheet", href="https://bloz.org/assets/bloz-header.css?v=3")',
+                0,
+            ),
+            (
+                "\t\tlink(rel=\"icon\", type=\"image/png\", sizes=\"32x32\", href=assetUrl(`./img/network-${network}/favicon-32x32.png`))",
+                favicon_links,
+                1,
+            ),
+            (btc_favicon_16, "", 0),
+            (btc_favicon_shortcut, "", 0),
+            (
+                f'\t\tlink(rel="icon", type="image/png", sizes="64x64", href="https://bloz.org/assets/favicon.png?v=10")',
+                "",
+                0,
+            ),
+            ("+themeCss", f"+themeCss\n{css_link}\n{header_css}", 1),
+            (
+                '+themeCss\n\t\tlink(rel="stylesheet", href="./style/bloz-theme.css")\n\t\tlink(rel="stylesheet", href="https://bloz.org/assets/bloz-header.css")\n\t\tlink(rel="stylesheet", href="./style/bloz-theme.css")',
+                '+themeCss\n\t\tlink(rel="stylesheet", href="./style/bloz-theme.css")\n\t\tlink(rel="stylesheet", href="https://bloz.org/assets/bloz-header.css?v=3")',
+                1,
+            ),
+            (
+                '+themeCss\n\t\tlink(rel="stylesheet", href="./style/bloz-theme.css")\n\t\tlink(rel="stylesheet", href="https://bloz.org/assets/bloz-header.css?v=2")',
+                '+themeCss\n\t\tlink(rel="stylesheet", href="./style/bloz-theme.css")\n\t\tlink(rel="stylesheet", href="https://bloz.org/assets/bloz-header.css?v=3")',
+                1,
+            ),
+            (
                 'img(src="https://bloz.org/assets/bloz-mark.png", alt="", width="22", height="22")',
-                'img(src="https://bloz.org/assets/bloz-mark.png", alt="", width="83", height="83")',
+                'img(src="https://bloz.org/assets/bloz-logo-nav.png", alt="Block Zero", height="52")',
                 0,
             ),
             (
                 'img(src="https://bloz.org/assets/bloz-mark.png", alt="", width="55", height="55")',
+                'img(src="https://bloz.org/assets/bloz-logo-nav.png", alt="Block Zero", height="52")',
+                0,
+            ),
+            (
                 'img(src="https://bloz.org/assets/bloz-mark.png", alt="", width="83", height="83")',
+                'img(src="https://bloz.org/assets/bloz-logo-nav.png", alt="Block Zero", height="52")',
+                0,
+            ),
+            (
+                'img(src="https://bloz.org/assets/bloz-logo-nav.png", alt="", width="83", height="83")',
+                'img(src="https://bloz.org/assets/bloz-logo-nav.png", alt="Block Zero", height="52")',
                 0,
             ),
             (
@@ -258,8 +313,11 @@ def patch_file(path: str, reps: list[tuple[str, str, int]]) -> None:
         return
     changed = False
     for old, new, n in reps:
-        if new in s:
+        if new and new in s:
             print(f"  already applied in {path}: {new[:60]!r}")
+            continue
+        if not new and old not in s:
+            print(f"  already removed in {path}: {old[:60]!r}")
             continue
         if old not in s:
             print(f"  WARN not found in {path}: {old!r}")

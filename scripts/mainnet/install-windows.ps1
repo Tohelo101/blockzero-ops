@@ -100,27 +100,29 @@ if ((Test-Path (Join-Path $BinDir "bitcoind.exe")) -and (Test-Path (Join-Path $B
     Invoke-WebRequest -Uri $info.Url -OutFile $zip -UseBasicParsing
     Expand-Archive -Path $zip -DestinationPath $InstallDir -Force
     Remove-Item $zip -Force
-    Get-ChildItem $InstallDir -Directory -Filter "blockzero-*-windows-x64*" | ForEach-Object {
-        $srcBin = Join-Path $_.FullName "bin"
-        if (Test-Path $srcBin) {
-            Get-ChildItem $srcBin -Filter "*.exe" | ForEach-Object {
-                Copy-Item $_.FullName $BinDir -Force
-            }
-            $platforms = Join-Path $srcBin "platforms"
-            if (Test-Path $platforms) {
-                $destPlatforms = Join-Path $BinDir "platforms"
-                New-Item -ItemType Directory -Force -Path $destPlatforms | Out-Null
-                Copy-Item (Join-Path $platforms "*") $destPlatforms -Force
-            }
-            Get-ChildItem $srcBin -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
-                Copy-Item $_.FullName $BinDir -Force
-            }
-        }
+    $extractDirName = [System.IO.Path]::GetFileNameWithoutExtension($info.Name)
+    $srcBin = Join-Path $InstallDir $extractDirName "bin"
+    if (-not (Test-Path $srcBin)) {
+        throw "Release layout missing bin/: $srcBin"
     }
-    Write-Host "Installed to $BinDir"
+    Get-ChildItem $srcBin -Filter "*.exe" | ForEach-Object {
+        Copy-Item $_.FullName $BinDir -Force
+    }
+    $platforms = Join-Path $srcBin "platforms"
+    if (Test-Path $platforms) {
+        $destPlatforms = Join-Path $BinDir "platforms"
+        New-Item -ItemType Directory -Force -Path $destPlatforms | Out-Null
+        Copy-Item (Join-Path $platforms "*") $destPlatforms -Force
+    }
+    Get-ChildItem $srcBin -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
+        Copy-Item $_.FullName $BinDir -Force
+    }
+    Write-Host "Installed to $BinDir (from $extractDirName)"
 }
 
 Ensure-MainnetConfig
+
+& (Join-Path $PSScriptRoot "fix-wallet-datadir.ps1")
 
 $LegacyLauncher = Join-Path $BinDir "BlockZero Wallet.bat"
 if (Test-Path $LegacyLauncher) {

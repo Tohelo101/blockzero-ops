@@ -106,7 +106,7 @@ void StratumClient::Stop() {
 void StratumClient::SendLine(const std::string& line) {
     if (!ws_) return;
     std::lock_guard<std::mutex> lock(send_mu_);
-    static_cast<ix::WebSocket*>(ws_)->send(line + "\n");
+    static_cast<ix::WebSocket*>(ws_)->send(line);
 }
 
 bool StratumClient::SubmitShare(const std::string& job_id, uint32_t nonce) {
